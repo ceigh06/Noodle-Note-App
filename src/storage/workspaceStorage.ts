@@ -4,8 +4,10 @@ import {
   deleteSingleNoteIndex,
   findAssetMetaBySha256,
   findOrphanAssetsForNote,
+  getDemoSourceBytesByPathOrHash,
   getStoredSourceDocuments,
   hasConfirmedAssetCleanup,
+  listDemoSourceFiles,
   loadWorkspaceHandle,
   markAssetCleanupConfirmed,
   NoteIndexRow,
@@ -14,11 +16,13 @@ import {
   removeAssetMeta,
   removeNoteAssets,
   replaceStoredSourceDocuments,
+  saveDemoSourceFile,
   saveWorkspaceHandle,
   upsertAssetMeta,
   upsertNoteAssets,
   upsertSingleNoteIndex,
 } from '../db/noodleDb';
+import {buildSampleAcademicPdfBytes} from '../pdf/pdfAnnotations';
 import {
   ALLOWED_IMAGE_EXTENSIONS,
   ALLOWED_IMAGE_MIME_TYPES,
@@ -2981,4 +2985,176 @@ export async function scanSourceDocumentsInWorkspace(): Promise<{
   await replaceStoredSourceDocuments(documents);
   return {documents, problems};
 }
+
+export async function computePdfBytesSha256(
+  buffer: ArrayBuffer,
+): Promise<string> {
+  return computeBytesSha256(buffer);
+}
+
+/**
+ * Strictly read-only access to raw file bytes inside `sources/`.
+ * Never opens a writable stream or mutates any source file on disk.
+ */
+export async function readSourceFileBytes(
+  relativePath: string,
+  expectedContentHash?: string,
+): Promise<ArrayBuffer> {
+  if (typeof relativePath !== 'string' || !relativePath.startsWith('sources/')) {
+    throw new StorageError(
+      'PATH_TRAVERSAL',
+      `Source reads are restricted strictly to sources/: "${relativePath}".`,
+    );
+  }
+
+  const innerPath = relativePath.slice('sources/'.length).replace(/\\/g, '/');
+  const segments = innerPath.split('/').filter((s) => s.length > 0);
+  if (segments.length === 0) {
+    throw new StorageError('INVALID_NAME', 'Source path cannot be empty.');
+  }
+  const safeSegments = segments.map((seg) => sanitizeName(seg));
+
+  if (activeRootHandle) {
+    try {
+      let dirHandle = await resolvePillarDir(activeRootHandle, 'sources', false);
+      for (let i = 0; i < safeSegments.length - 1; i += 1) {
+        dirHandle = await dirHandle.getDirectoryHandle(safeSegments[i], {
+          create: false,
+        });
+      }
+      const fileHandle = await dirHandle.getFileHandle(
+        safeSegments[safeSegments.length - 1],
+        {create: false},
+      );
+      const file = await fileHandle.getFile();
+      return await file.arrayBuffer();
+    } catch (err) {
+      if (err instanceof StorageError) {
+        throw err;
+      }
+      throw new StorageError(
+        'NOT_FOUND',
+        `Could not read source file "${relativePath}".`,
+      );
+    }
+  }
+
+  const demoBytes = await getDemoSourceBytesByPathOrHash(
+    relativePath,
+    expectedContentHash,
+  );
+  if (demoBytes) {
+    return demoBytes;
+  }
+
+  throw new StorageError(
+    'NOT_FOUND',
+    `Source file "${relativePath}" is not available in demo storage.`,
+  );
+}
+
+const DEMO_PDF_FILE_NAME = 'buzsaki-2015-sharp-wave-ripples.pdf';
+const DEMO_PDF_PATH = `sources/${DEMO_PDF_FILE_NAME}`;
+
+export async function loadDemoSourceDocuments(): Promise<SourceDocumentEntry[]> {
+  let rows = await listDemoSourceFiles();
+  if (rows.length === 0) {
+    const sampleUint8 = buildSampleAcademicPdfBytes();
+    const sampleBuffer = sampleUint8.buffer.slice(
+      sampleUint8.byteOffset,
+      sampleUint8.byteOffset + sampleUint8.byteLength,
+    ) as ArrayBuffer;
+    const contentHash = await computeBytesSha256(sampleBuffer);
+    await saveDemoSourceFile({
+      id: `source:${DEMO_PDF_PATH}`,
+      path: DEMO_PDF_PATH,
+      fileName: DEMO_PDF_FILE_NAME,
+      title: 'Buzsaki (2015) — Sharp-Wave Ripples (Sample PDF)',
+      size: sampleBuffer.byteLength,
+      lastModified: Date.now(),
+      contentHash,
+      bytes: sampleBuffer,
+      updatedAt: new Date().toISOString(),
+    });
+    rows = await listDemoSourceFiles();
+  }
+
+  const docs: SourceDocumentEntry[] = [];
+  for (const row of rows) {
+    let chunks: SourceDocumentEntry['chunks'] = [];
+    try {
+      const pages = await extractPdfPagesInWorker(row.bytes.slice(0));
+      chunks = chunkPdfPages(pages);
+    } catch {
+      chunks = [];
+    }
+    docs.push({
+      id: row.id,
+      fileName: row.fileName,
+      path: row.path,
+      pillar: 'sources',
+      title: row.title,
+      kind: 'pdf',
+      size: row.size,
+      lastModified: row.lastModified,
+      contentHash: row.contentHash,
+      chunks,
+      updatedAt: row.updatedAt,
+    });
+  }
+  docs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return docs;
+}
+
+export async function importDemoPdfSource(file: {
+  name: string;
+  size: number;
+  lastModified?: number;
+  arrayBuffer: () => Promise<ArrayBuffer>;
+}): Promise<SourceDocumentEntry> {
+  const safeFileName = sanitizeName(file.name);
+  if (!safeFileName.toLowerCase().endsWith('.pdf')) {
+    throw new StorageError('INVALID_NAME', 'Only .pdf files can be opened here.');
+  }
+  const bytes = await file.arrayBuffer();
+  const contentHash = await computeBytesSha256(bytes);
+  const path = `sources/${safeFileName}`;
+  const title = safeFileName.replace(/\.pdf$/i, '') || safeFileName;
+  const updatedAt = new Date(file.lastModified || Date.now()).toISOString();
+
+  await saveDemoSourceFile({
+    id: `source:${path}`,
+    path,
+    fileName: safeFileName,
+    title,
+    size: bytes.byteLength,
+    lastModified: file.lastModified || Date.now(),
+    contentHash,
+    bytes,
+    updatedAt,
+  });
+
+  let chunks: SourceDocumentEntry['chunks'] = [];
+  try {
+    const pages = await extractPdfPagesInWorker(bytes.slice(0));
+    chunks = chunkPdfPages(pages);
+  } catch {
+    chunks = [];
+  }
+
+  return {
+    id: `source:${path}`,
+    fileName: safeFileName,
+    path,
+    pillar: 'sources',
+    title,
+    kind: 'pdf',
+    size: bytes.byteLength,
+    lastModified: file.lastModified || Date.now(),
+    contentHash,
+    chunks,
+    updatedAt,
+  };
+}
+
 

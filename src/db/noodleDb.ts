@@ -5,10 +5,13 @@ import {
   CloudProviderId,
   EmbeddingModelConfig,
   EncryptedKeyRecord,
+  PdfAnnotationRecord,
+  PdfHighlightColor,
   Pillar,
   SourceDocumentEntry,
   StoredNoteEntry,
 } from '../types/noodle';
+import {sortPdfAnnotations} from '../pdf/pdfAnnotations';
 
 export interface WorkspaceHandleRow {
   key: 'current';
@@ -108,6 +111,18 @@ export interface BatchMoveRecord {
   rolledBack?: boolean;
 }
 
+export interface DemoSourceFileRow {
+  id: string;
+  path: string;
+  fileName: string;
+  title: string;
+  size: number;
+  lastModified: number;
+  contentHash: string;
+  bytes: ArrayBuffer;
+  updatedAt: string;
+}
+
 class NoodleDatabase extends Dexie {
   workspaceHandles!: Table<WorkspaceHandleRow, string>;
   notesIndex!: Table<NoteIndexRow, string>;
@@ -122,6 +137,8 @@ class NoodleDatabase extends Dexie {
   dismissedSuggestions!: Table<DismissedSuggestionRow, string>;
   encryptedKeys!: Table<EncryptedKeyRecord, CloudProviderId>;
   batchMoves!: Table<BatchMoveRecord, string>;
+  pdfAnnotations!: Table<PdfAnnotationRecord, string>;
+  demoSourceFiles!: Table<DemoSourceFileRow, string>;
 
   constructor() {
     super('noodle_local_db');
@@ -201,6 +218,23 @@ class NoodleDatabase extends Dexie {
       dismissedSuggestions: 'id, fromNoteId, targetNoteId',
       encryptedKeys: 'provider, updatedAt',
       batchMoves: 'batchId, timestamp',
+    });
+    this.version(7).stores({
+      workspaceHandles: 'key, updatedAt',
+      notesIndex: 'id, path, pillar, category, updatedAt, fileName, contentHash',
+      noteAssets: 'id, noteId, assetPath',
+      assetsMeta: 'assetPath, sha256',
+      appSettings: 'key',
+      embeddingChunks: 'id, noteId, blockId, modelId, contentHash, pillar',
+      indexedFiles: 'docId, path, contentHash, modelId',
+      embeddingMeta: 'key',
+      sourceDocuments: 'id, path, contentHash, kind',
+      backlinks: 'id, sourceNoteId, targetNoteId, sourceBlockId, targetBlockId',
+      dismissedSuggestions: 'id, fromNoteId, targetNoteId',
+      encryptedKeys: 'provider, updatedAt',
+      batchMoves: 'batchId, timestamp',
+      pdfAnnotations: 'id, contentHash, coordKey, createdAt',
+      demoSourceFiles: 'id, path, contentHash',
     });
   }
 }
@@ -676,4 +710,89 @@ export async function saveActiveProviderSetting(
     await noodleDb.appSettings.put({key: 'cloudProvider', value: provider});
     await noodleDb.appSettings.put({key: `cloudModel:${provider}`, value: model});
   });
+}
+
+// ---------- PDF ANNOTATIONS (KEYED BY CONTENT HASH + TEXT-LAYER COORDS) ----------
+
+export async function listPdfAnnotationsByHash(
+  contentHash: string,
+): Promise<PdfAnnotationRecord[]> {
+  if (!contentHash) {
+    return [];
+  }
+  const rows = await noodleDb.pdfAnnotations
+    .where('contentHash')
+    .equals(contentHash)
+    .toArray();
+  return sortPdfAnnotations(rows);
+}
+
+export async function savePdfAnnotation(
+  record: PdfAnnotationRecord,
+): Promise<void> {
+  await noodleDb.pdfAnnotations.put(record);
+}
+
+export async function updatePdfAnnotation(
+  id: string,
+  patch: {comment?: string; color?: PdfHighlightColor},
+): Promise<PdfAnnotationRecord | null> {
+  const existing = await noodleDb.pdfAnnotations.get(id);
+  if (!existing) {
+    return null;
+  }
+  const updated: PdfAnnotationRecord = {
+    ...existing,
+    comment: patch.comment !== undefined ? patch.comment : existing.comment,
+    color: patch.color !== undefined ? patch.color : existing.color,
+    updatedAt: new Date().toISOString(),
+  };
+  await noodleDb.pdfAnnotations.put(updated);
+  return updated;
+}
+
+export async function deletePdfAnnotation(id: string): Promise<void> {
+  await noodleDb.pdfAnnotations.delete(id);
+}
+
+export async function clearPdfAnnotationsByHash(
+  contentHash: string,
+): Promise<void> {
+  await noodleDb.pdfAnnotations
+    .where('contentHash')
+    .equals(contentHash)
+    .delete();
+}
+
+export async function listDemoSourceFiles(): Promise<DemoSourceFileRow[]> {
+  return noodleDb.demoSourceFiles.toArray();
+}
+
+export async function saveDemoSourceFile(
+  row: DemoSourceFileRow,
+): Promise<void> {
+  await noodleDb.demoSourceFiles.put(row);
+}
+
+export async function getDemoSourceBytesByPathOrHash(
+  path: string,
+  contentHash?: string,
+): Promise<ArrayBuffer | null> {
+  const byPath = await noodleDb.demoSourceFiles
+    .where('path')
+    .equals(path)
+    .first();
+  if (byPath?.bytes) {
+    return byPath.bytes.slice(0);
+  }
+  if (contentHash) {
+    const byHash = await noodleDb.demoSourceFiles
+      .where('contentHash')
+      .equals(contentHash)
+      .first();
+    if (byHash?.bytes) {
+      return byHash.bytes.slice(0);
+    }
+  }
+  return null;
 }

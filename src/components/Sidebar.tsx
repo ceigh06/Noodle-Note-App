@@ -8,6 +8,7 @@ import {
   GraduationCap,
   Layers,
   PenLine,
+  Settings,
   Sliders,
   Target,
   X,
@@ -87,6 +88,7 @@ export function Sidebar({
     {path: '/workspace/gap-analysis', label: 'Gap Analysis', icon: Target},
     {path: '/workspace/organize', label: 'Organize Notes', icon: FolderTree},
     {path: '/workspace/trust-tuning', label: 'Trust & Tuning', icon: Sliders},
+    {path: '/settings', label: 'Settings', icon: Settings},
     {path: '/diagnostics', label: 'Diagnostics', icon: ClipboardCheck},
   ];
 

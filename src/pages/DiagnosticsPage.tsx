@@ -8,12 +8,14 @@ import {
 } from 'lucide-react';
 import {runCloudDiagnostics} from '../cloud/cloudDiagnostics';
 import {runEditorDiagnostics} from '../editor/editorDiagnostics';
+import {runPdfAnnotationDiagnostics} from '../pdf/pdfDiagnostics';
 import {runSearchDiagnostics} from '../search/searchDiagnostics';
 import {
   runChangeDetectionDiagnostics,
   runImageDiagnostics,
   runStorageDiagnostics,
 } from '../storage/workspaceStorage';
+import {runVoiceDiagnostics} from '../voice/voiceDiagnostics';
 import {
   DiagnosticCheckResult,
   RoutePath,
@@ -34,41 +36,93 @@ export function DiagnosticsPage({
 }: DiagnosticsPageProps) {
   const [checks, setChecks] = useState<DiagnosticCheckResult[]>([]);
   const [running, setRunning] = useState(false);
+  const [activeSuiteNote, setActiveSuiteNote] = useState<string | null>(null);
 
   const runChecks = useCallback(async () => {
+    const runToken = Date.now() + Math.random();
+    (runChecks as {latestToken?: number}).latestToken = runToken;
     setRunning(true);
+    setChecks([]);
+    setActiveSuiteNote('Running storage, editor, PDF, voice, and cloud checks...');
+
+    const suiteOrder = [
+      'storage',
+      'editor',
+      'image',
+      'change',
+      'pdf',
+      'voice',
+      'cloud',
+      'search',
+    ] as const;
+    const suiteBuckets = new Map<string, DiagnosticCheckResult[]>();
+
+    const publish = () => {
+      if ((runChecks as {latestToken?: number}).latestToken !== runToken) {
+        return;
+      }
+      const ordered: DiagnosticCheckResult[] = [];
+      for (const key of suiteOrder) {
+        const items = suiteBuckets.get(key);
+        if (items) {
+          ordered.push(...items);
+        }
+      }
+      setChecks(ordered);
+    };
+
+    const runSuite = async (
+      key: (typeof suiteOrder)[number],
+      fn: () => Promise<DiagnosticCheckResult[]>,
+    ) => {
+      try {
+        const res = await fn();
+        suiteBuckets.set(key, res);
+      } catch (err) {
+        suiteBuckets.set(key, [
+          {
+            id: `${key}-suite-error`,
+            name: `${key} suite`,
+            status: 'FAIL',
+            details: (err as Error).message || 'Diagnostic suite threw an error.',
+            durationMs: 0,
+          },
+        ]);
+      } finally {
+        publish();
+      }
+    };
+
     try {
-      const [
-        storageChecks,
-        editorChecks,
-        imageChecks,
-        changeChecks,
-        searchChecks,
-        cloudChecks,
-      ] = await Promise.all([
-        runStorageDiagnostics(),
-        runEditorDiagnostics(),
-        runImageDiagnostics(),
-        runChangeDetectionDiagnostics(),
-        runSearchDiagnostics(notes, sourceDocuments),
-        runCloudDiagnostics(),
-      ]);
-      setChecks([
-        ...storageChecks,
-        ...editorChecks,
-        ...imageChecks,
-        ...changeChecks,
-        ...searchChecks,
-        ...cloudChecks,
+      await Promise.all([
+        runSuite('storage', runStorageDiagnostics),
+        runSuite('editor', runEditorDiagnostics),
+        runSuite('image', runImageDiagnostics),
+        runSuite('change', runChangeDetectionDiagnostics),
+        runSuite('pdf', () => runPdfAnnotationDiagnostics(sourceDocuments)),
+        runSuite('voice', runVoiceDiagnostics),
+        runSuite('cloud', runCloudDiagnostics),
+        (async () => {
+          await runSuite('search', () =>
+            runSearchDiagnostics(notes, sourceDocuments),
+          );
+          if ((runChecks as {latestToken?: number}).latestToken === runToken) {
+            setActiveSuiteNote(null);
+          }
+        })(),
       ]);
     } finally {
-      setRunning(false);
+      if ((runChecks as {latestToken?: number}).latestToken === runToken) {
+        setRunning(false);
+        setActiveSuiteNote(null);
+      }
     }
   }, [notes, sourceDocuments]);
 
   useEffect(() => {
     void runChecks();
-  }, [runChecks]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const passedCount = checks.filter((c) => c.status === 'PASS').length;
 
@@ -86,7 +140,8 @@ export function DiagnosticsPage({
           <p className="text-xs text-[#9198A8] sm:text-sm">
             Automated storage, block-ID stability, schema migration, canonical
             hash, Markdown round-trip, autosave, image asset, change-detection,
-            on-device search, and BYOK cloud privacy self-checks.
+            on-device search, PDF immutability, voice kill switch &amp; zero audio
+            storage, and BYOK cloud privacy self-checks.
           </p>
         </div>
 
@@ -121,9 +176,15 @@ export function DiagnosticsPage({
             of {checks.length} checks
           </span>
           <span>
-            Storage, Editor, Asset, Change-Detection, Local Search &amp; BYOK
+            Storage, Editor, Asset, Change-Detection, Local Search, Voice &amp; BYOK
             Privacy invariants
           </span>
+        </div>
+      )}
+
+      {running && activeSuiteNote && checks.length > 0 && (
+        <div className="rounded-lg border border-[#232734] bg-[#13161E] px-4 py-2 text-xs text-[#9198A8]">
+          Loading local embedding model in Web Worker for search diagnostics…
         </div>
       )}
 

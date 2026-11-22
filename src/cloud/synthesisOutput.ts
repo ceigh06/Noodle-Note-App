@@ -70,16 +70,32 @@ export function sanitizeAndCapExcerpt(
   hadMarkupStripped: boolean;
 } {
   const input = String(rawText ?? '');
-  let cleaned = input
-    // Remove script/style/iframe/noscript/object blocks including inner code
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<(iframe|object|embed|svg)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    // Strip remaining HTML tags
-    .replace(/<[^>]+>/g, ' ')
-    // Strip dangerous URI schemes
-    .replace(/(?:javascript|vbscript|data):[^\s)'"]+/gi, '')
+  let cleaned = input;
+  let prev = '';
+  let passes = 0;
+  while (cleaned !== prev && passes < 12) {
+    prev = cleaned;
+    cleaned = cleaned
+      // Remove script/style/iframe/noscript/object/embed/svg blocks including inner code
+      .replace(
+        /<(script|style|iframe|object|embed|svg|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi,
+        ' ',
+      )
+      .replace(/<!--[\s\S]*?-->/g, ' ');
+    passes += 1;
+  }
+  prev = '';
+  passes = 0;
+  while (cleaned !== prev && passes < 12) {
+    prev = cleaned;
+    cleaned = cleaned
+      // Strip remaining HTML tags
+      .replace(/<\/?[a-zA-Z][^>]*>/g, ' ')
+      // Strip dangerous URI schemes
+      .replace(/(?:javascript|vbscript|data):[^\s)'"]+/gi, '');
+    passes += 1;
+  }
+  cleaned = cleaned
     // Convert markdown images/links to plain text labels
     .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')

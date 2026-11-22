@@ -536,3 +536,86 @@ export interface GapAnalysisReport {
   topics: SyllabusTopicCoverageResult[];
 }
 
+export type PdfHighlightColor = 'amber' | 'emerald' | 'sky' | 'rose';
+
+export interface PdfNormalizedRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface PdfTextLayerAnchor {
+  pageNumber: number;
+  startSpanIndex: number;
+  startCharOffset: number;
+  endSpanIndex: number;
+  endCharOffset: number;
+  rects: PdfNormalizedRect[];
+  boundingBox: PdfNormalizedRect;
+}
+
+export interface PdfAnnotationRecord {
+  id: string;
+  contentHash: string;
+  coordKey: string;
+  lastKnownPath?: string;
+  docTitle?: string;
+  quote: string;
+  comment: string;
+  color: PdfHighlightColor;
+  anchor: PdfTextLayerAnchor;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type VoiceCapturePhase =
+  | 'off'
+  | 'idle'
+  | 'loading-model'
+  | 'listening'
+  | 'transcribing'
+  | 'wake-listening'
+  | 'error';
+
+export type BuiltInWakeKeyword =
+  | 'Porcupine'
+  | 'Computer'
+  | 'Jarvis'
+  | 'Bumblebee'
+  | 'Blueberry'
+  | 'Grapefruit'
+  | 'Grasshopper'
+  | 'Picovoice'
+  | 'Terminator'
+  | 'Americano';
+
+export interface VoiceSearchSettings {
+  experimentalVoiceEnabled: boolean;
+  whisperModelId: string;
+  whisperDownloaded: boolean;
+  pushToTalkHotkey: string;
+  wakeWordEnabled: boolean;
+  wakeWordKeyword: BuiltInWakeKeyword;
+}
+
+export interface WhisperProgressState {
+  status: 'idle' | 'downloading' | 'loading' | 'ready' | 'transcribing' | 'error';
+  modelId: string;
+  progress: number;
+  loadedBytes: number;
+  totalBytes: number;
+  currentFile?: string;
+  message?: string;
+}
+
+export interface VoiceRuntimeState {
+  phase: VoiceCapturePhase;
+  activeTrackCount: number;
+  micPermissionState: 'unknown' | 'prompt' | 'granted' | 'denied';
+  lastTranscript: string;
+  lastError: string | null;
+  wakeWordActive: boolean;
+  wakeWordStatusMessage: string | null;
+}
+

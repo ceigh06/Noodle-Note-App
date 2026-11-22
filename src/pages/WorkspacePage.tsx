@@ -21,10 +21,14 @@ import {
   EmbeddingProgressState,
   Pillar,
   PillarFilter,
+  RoutePath,
   ScanProblem,
   SearchResultItem,
   SourceDocumentEntry,
   StoredNoteEntry,
+  VoiceRuntimeState,
+  VoiceSearchSettings,
+  WhisperProgressState,
   WorkspaceConnectionState,
 } from '../types/noodle';
 
@@ -43,6 +47,13 @@ interface WorkspacePageProps {
   aiEnabled: boolean;
   embeddingConfig: EmbeddingModelConfig;
   embeddingProgress: EmbeddingProgressState;
+  voiceSettings: VoiceSearchSettings;
+  voiceRuntime: VoiceRuntimeState;
+  whisperProgress: WhisperProgressState;
+  onStartPushToTalk: () => void;
+  onStopPushToTalk: () => void;
+  onMasterKillSwitch: () => void;
+  onNavigate: (route: RoutePath) => void;
   connectionState: WorkspaceConnectionState;
   folderName: string | null;
   busy: boolean;
@@ -58,6 +69,7 @@ interface WorkspacePageProps {
   onChangeModelId: (modelId: string) => void;
   onOpenNewNote: () => void;
   onImportMarkdown: (file: File) => Promise<void>;
+  onImportDemoPdf?: (file: File) => Promise<void>;
   onReconnect: () => void;
   onRescan: () => void;
   onSelectFolder: () => void;
@@ -110,6 +122,13 @@ export function WorkspacePage({
   aiEnabled,
   embeddingConfig,
   embeddingProgress,
+  voiceSettings,
+  voiceRuntime,
+  whisperProgress,
+  onStartPushToTalk,
+  onStopPushToTalk,
+  onMasterKillSwitch,
+  onNavigate,
   connectionState,
   folderName,
   busy,
@@ -125,11 +144,13 @@ export function WorkspacePage({
   onChangeModelId,
   onOpenNewNote,
   onImportMarkdown,
+  onImportDemoPdf,
   onReconnect,
   onRescan,
   onSelectFolder,
 }: WorkspacePageProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const pdfInputRef = useRef<HTMLInputElement | null>(null);
   const [problemsOpen, setProblemsOpen] = useState(false);
   const pillarInfo = PILLAR_META[activePillar];
   const showProblemsPanel = problemsOpen || problems.length > 0;
@@ -186,6 +207,20 @@ export function WorkspacePage({
           const file = e.target.files?.[0];
           if (file) {
             void onImportMarkdown(file);
+            e.target.value = '';
+          }
+        }}
+      />
+      {/* Hidden Demo PDF Input */}
+      <input
+        ref={pdfInputRef}
+        type="file"
+        accept=".pdf,application/pdf"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file && onImportDemoPdf) {
+            void onImportDemoPdf(file);
             e.target.value = '';
           }
         }}
@@ -308,6 +343,17 @@ export function WorkspacePage({
             <span>Import .md</span>
           </button>
 
+          {connectionState !== 'connected' && onImportDemoPdf && (
+            <button
+              type="button"
+              onClick={() => pdfInputRef.current?.click()}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#272C3A] bg-[#151822] px-3 text-xs font-medium text-[#C8CCD6] whitespace-nowrap transition-colors hover:border-[#3A4154] hover:text-[#F4F0E7]"
+            >
+              <FileText className="h-3.5 w-3.5 text-[#E0A83E]" />
+              <span>Open Demo PDF</span>
+            </button>
+          )}
+
           <div className="text-xs text-[#888F9F] tabular-nums">
             Showing{' '}
             <span className="font-semibold text-[#ECEBE6]">
@@ -328,6 +374,13 @@ export function WorkspacePage({
         aiEnabled={aiEnabled}
         embeddingConfig={embeddingConfig}
         progressState={embeddingProgress}
+        voiceSettings={voiceSettings}
+        voiceRuntime={voiceRuntime}
+        whisperProgress={whisperProgress}
+        onStartPushToTalk={onStartPushToTalk}
+        onStopPushToTalk={onStopPushToTalk}
+        onMasterKillSwitch={onMasterKillSwitch}
+        onOpenSettings={onNavigate}
         onDownloadModel={onDownloadModel}
         onCancelWork={onCancelModelWork}
         onChangeModelId={onChangeModelId}

@@ -41,12 +41,9 @@ import {
   getEffectiveAllowedDomains,
   loadTrustSettings,
 } from '../cloud/trustSettings';
-import {
-  FlashcardDeckView,
-  PracticeExamView,
-  PreservedFromNotesMarker,
-} from '../components/AiInteractiveViews';
+import {FlashcardDeckView, PracticeExamView, PreservedFromNotesMarker} from '../components/AiInteractiveViews';
 import {CloudPrivacyNoticeModal} from '../components/CloudPrivacyNoticeModal';
+import {isAllowedLinkUrl} from '../editor/noteSchema';
 import {
   AiNoteMetadata,
   BacklinkRecord,
@@ -1017,15 +1014,21 @@ export function SynthesizerPage({
                     className="flex items-start justify-between gap-2 rounded-lg border border-sky-500/25 bg-[#0F1117] p-3 text-xs"
                   >
                     <div className="space-y-1">
-                      <a
-                        href={wc.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 font-medium text-sky-300 hover:underline"
-                      >
-                        <span>{wc.title || wc.domain}</span>
-                        <ArrowUpRight className="h-3 w-3" />
-                      </a>
+                      {isAllowedLinkUrl(wc.url) ? (
+                        <a
+                          href={wc.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 font-medium text-sky-300 hover:underline"
+                        >
+                          <span>{wc.title || wc.domain}</span>
+                          <ArrowUpRight className="h-3 w-3" />
+                        </a>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 font-medium text-sky-300">
+                          {wc.title || wc.domain}
+                        </span>
+                      )}
                       <p className="font-mono text-[10px] text-[#7E8596]">
                         {wc.domain}
                       </p>

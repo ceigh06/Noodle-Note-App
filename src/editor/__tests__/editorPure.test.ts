@@ -34,6 +34,13 @@ import {
 } from '../../cloud/synthesisOutput';
 import type {NoteIndexRow} from '../../db/noodleDb';
 import {
+  buildPdfCoordKey,
+  buildSampleAcademicPdfBytes,
+  computeBoundingBox,
+  normalizeSelectionRects,
+  sortPdfAnnotations,
+} from '../../pdf/pdfAnnotations';
+import {
   chunkPdfPages,
   chunkPlainTextSource,
   chunkTipTapDocument,
@@ -65,6 +72,24 @@ import {
   validateNoteAssetPaths,
 } from '../noteSchema';
 import {extractPlainText} from '../plainText';
+import {
+  concatenateFloat32Chunks,
+  getActiveMicrophoneTrackCount,
+  getTrackedAudioContextCount,
+  getTrackedStreamCount,
+  killAllMicrophoneAccess,
+  registerAudioContext,
+  registerMicrophoneStream,
+  registerMicrophoneTeardownHook,
+  resampleTo16kMono,
+  zeroOutChunks,
+} from '../../voice/microphoneController';
+import {startPorcupineWakeWord} from '../../voice/porcupineWakeWord';
+import {
+  getDefaultVoiceSearchSettings,
+  matchesPushToTalkHotkey,
+} from '../../voice/voiceConfig';
+import {runVoiceDiagnostics} from '../../voice/voiceDiagnostics';
 
 test('extractPlainText returns document-order blocks with blockIds and joined text', () => {
   const doc: TipTapDoc = {
@@ -216,7 +241,7 @@ test('markdownCodec round-trips CommonMark + tables + task lists and strips raw 
     '| --- | --- |',
     '| 1 | 2 |',
     '',
-    '<div onclick="evil()">Inline</div><script>steal()</script>',
+    '<div onclick="evil()">Inline</div><script>steal()</script><scr<script></script>ipt>nestedSteal()</script><iframe src="https://evil.example">hidden</iframe>',
   ].join('\n');
 
   const doc = markdownToTiptap(md);
@@ -229,6 +254,8 @@ test('markdownCodec round-trips CommonMark + tables + task lists and strips raw 
   assert.ok(exported.includes('| A | B |'));
   assert.ok(!exported.includes('javascript:'));
   assert.ok(!plain.text.includes('steal()'));
+  assert.ok(!plain.text.includes('nestedSteal()'));
+  assert.ok(!plain.text.includes('hidden'));
   assert.ok(plain.text.includes('Inline'));
 });
 
@@ -1391,6 +1418,213 @@ test('Syllabus gap analysis privacy gate enforces user notice approval before se
     /already sent or cancelled/,
   );
 });
+
+test('PDF annotation coordinate normalization merges same-line rects and builds deterministic hash coordKey', () => {
+  const pageRect = {left: 100, top: 200, width: 500, height: 800};
+  const rects = normalizeSelectionRects(
+    [
+      {left: 150, top: 280, width: 100, height: 16},
+      {left: 251, top: 280, width: 99, height: 16},
+      {left: 150, top: 310, width: 120, height: 16},
+    ],
+    pageRect,
+  );
+
+  assert.equal(rects.length, 2);
+  assert.ok(Math.abs(rects[0].x - 0.1) < 1e-4);
+  assert.ok(Math.abs(rects[0].width - 0.4) < 1e-4);
+
+  const bbox = computeBoundingBox(rects);
+  assert.ok(Math.abs(bbox.x - 0.1) < 1e-4);
+  assert.ok(Math.abs(bbox.y - 0.1) < 1e-4);
+  assert.ok(Math.abs(bbox.width - 0.4) < 1e-4);
+
+  const anchor = {
+    pageNumber: 3,
+    startSpanIndex: 4,
+    startCharOffset: 2,
+    endSpanIndex: 6,
+    endCharOffset: 9,
+    rects,
+    boundingBox: bbox,
+  };
+  const keyA = buildPdfCoordKey('sha256:abc123', anchor);
+  const keyB = buildPdfCoordKey('sha256:abc123', anchor);
+  const keyOtherHash = buildPdfCoordKey('sha256:different', anchor);
+
+  assert.equal(keyA, keyB);
+  assert.notEqual(keyA, keyOtherHash);
+  assert.ok(keyA.startsWith('sha256:abc123::p3::s4:2-e6:9::'));
+});
+
+test('sortPdfAnnotations orders annotations by page then vertical and horizontal coordinates', () => {
+  const mk = (id: string, pageNumber: number, x: number, y: number) => ({
+    id,
+    contentHash: 'sha256:same',
+    coordKey: `sha256:same::p${pageNumber}::${x},${y}`,
+    quote: `quote-${id}`,
+    comment: '',
+    color: 'amber' as const,
+    anchor: {
+      pageNumber,
+      startSpanIndex: 0,
+      startCharOffset: 0,
+      endSpanIndex: 0,
+      endCharOffset: 5,
+      rects: [{x, y, width: 0.2, height: 0.02}],
+      boundingBox: {x, y, width: 0.2, height: 0.02},
+    },
+    createdAt: '2026-11-22T00:00:00Z',
+    updatedAt: '2026-11-22T00:00:00Z',
+  });
+
+  const sorted = sortPdfAnnotations([
+    mk('p2', 2, 0.1, 0.2),
+    mk('p1-low', 1, 0.1, 0.7),
+    mk('p1-top-right', 1, 0.5, 0.15),
+    mk('p1-top-left', 1, 0.1, 0.15),
+  ]);
+
+  assert.deepEqual(
+    sorted.map((item) => item.id),
+    ['p1-top-left', 'p1-top-right', 'p1-low', 'p2'],
+  );
+});
+
+test('buildSampleAcademicPdfBytes produces a valid 2-page PDF byte stream without mutating inputs', () => {
+  const bytes = buildSampleAcademicPdfBytes();
+  const decoded = new TextDecoder().decode(bytes);
+  assert.ok(decoded.startsWith('%PDF-1.4\n'));
+  assert.ok(decoded.includes('/Count 2'));
+  assert.ok(decoded.includes('%%EOF'));
+});
+
+test('Voice Search defaults to experimental OFF with zero hard-coded keys and safe hotkey matching', () => {
+  const defaults = getDefaultVoiceSearchSettings();
+  assert.equal(defaults.experimentalVoiceEnabled, false);
+  assert.equal(defaults.wakeWordEnabled, false);
+  assert.equal(defaults.pushToTalkHotkey, 'Alt+Space');
+  assert.equal('accessKey' in defaults, false);
+
+  assert.equal(
+    matchesPushToTalkHotkey(
+      {
+        code: 'Space',
+        key: ' ',
+        altKey: true,
+        ctrlKey: false,
+        shiftKey: false,
+        metaKey: false,
+      },
+      'Alt+Space',
+    ),
+    true,
+  );
+
+  // Unmodified Space must NOT hijack typing inside editable inputs
+  assert.equal(
+    matchesPushToTalkHotkey(
+      {
+        code: 'Space',
+        key: ' ',
+        altKey: false,
+        ctrlKey: false,
+        shiftKey: false,
+        metaKey: false,
+      },
+      'Space',
+      {tagName: 'TEXTAREA', isContentEditable: false},
+    ),
+    false,
+  );
+});
+
+test('Master Kill Switch stops every registered microphone track, closes AudioContexts, and zeros RAM audio', async () => {
+  const track1 = {
+    id: 'test-track-1',
+    readyState: 'live',
+    stopCalled: false,
+    stop() {
+      this.readyState = 'ended';
+      this.stopCalled = true;
+    },
+  };
+  const track2 = {
+    id: 'test-track-2',
+    readyState: 'live',
+    stopCalled: false,
+    stop() {
+      this.readyState = 'ended';
+      this.stopCalled = true;
+    },
+  };
+  let ctxClosed = false;
+  let hookCalled = false;
+
+  registerMicrophoneStream({
+    getTracks: () => [track1, track2],
+  });
+  registerAudioContext({
+    state: 'running',
+    async close() {
+      ctxClosed = true;
+    },
+  });
+  const unsub = registerMicrophoneTeardownHook(() => {
+    hookCalled = true;
+  });
+
+  assert.equal(getActiveMicrophoneTrackCount() >= 2, true);
+  const report = await killAllMicrophoneAccess();
+  unsub();
+
+  assert.equal(track1.stopCalled, true);
+  assert.equal(track2.stopCalled, true);
+  assert.equal(track1.readyState, 'ended');
+  assert.equal(track2.readyState, 'ended');
+  assert.equal(ctxClosed, true);
+  assert.equal(hookCalled, true);
+  assert.equal(report.remainingActiveTracks, 0);
+  assert.equal(getActiveMicrophoneTrackCount(), 0);
+  assert.equal(getTrackedStreamCount(), 0);
+  assert.equal(getTrackedAudioContextCount(), 0);
+
+  // RAM-only resampling + explicit buffer zeroing
+  const merged = concatenateFloat32Chunks([
+    new Float32Array([0.4, -0.4]),
+    new Float32Array([0.2, -0.2]),
+  ]);
+  const resampled = resampleTo16kMono(merged, 48000);
+  assert.ok(resampled.length >= 1);
+  const arr = [merged, resampled];
+  zeroOutChunks(arr);
+  assert.equal(arr.length, 0);
+  assert.equal(merged.every((v) => v === 0), true);
+  assert.equal(resampled.every((v) => v === 0), true);
+});
+
+test('Porcupine wake word rejects missing AccessKey and voice diagnostics pass', async () => {
+  await assert.rejects(
+    () =>
+      startPorcupineWakeWord({
+        accessKey: '   ',
+        keyword: 'Porcupine',
+        onDetected: () => undefined,
+        onError: () => undefined,
+      }),
+    /AccessKey is required/i,
+  );
+
+  const diag = await runVoiceDiagnostics();
+  assert.equal(diag.length, 3);
+  assert.equal(
+    diag.every((c) => c.status === 'PASS'),
+    true,
+    `Voice diagnostics failed: ${JSON.stringify(diag)}`,
+  );
+});
+
+
 
 
 

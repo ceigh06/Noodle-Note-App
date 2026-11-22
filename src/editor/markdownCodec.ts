@@ -6,21 +6,35 @@ import {
 } from './noteSchema';
 
 /**
- * Strips raw HTML tags and dangerous tag blocks (<script>, <style>) cleanly.
- * Decodes basic HTML entities only where safe, without injecting DOM HTML.
+ * Strips raw HTML tags and dangerous tag blocks (<script>, <style>, <iframe>, <svg>, <object>, <embed>, <noscript>) cleanly
+ * in a fixed-point loop to defeat nested/obfuscated tag reconstruction without touching the DOM.
  */
 export function stripRawHtml(input: string): string {
-  // Remove script/style/iframe blocks including contents
+  // Preserve angle-bracket autolinks like <https://example.com> by turning them into plain URLs first
   let cleaned = input
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<!--[\s\S]*?-->/g, '');
+    .replace(/<(https?:\/\/[^\s>]+)>/gi, '$1')
+    .replace(/<(mailto:[^\s>]+)>/gi, '$1');
 
-  // Strip remaining HTML tags like <div>, <span>, <u>, <br>, <img>, etc.
-  // Keep angle-bracket autolinks like <https://example.com> by turning them into plain URLs first
-  cleaned = cleaned.replace(/<(https?:\/\/[^\s>]+)>/gi, '$1');
-  cleaned = cleaned.replace(/<(mailto:[^\s>]+)>/gi, '$1');
-  cleaned = cleaned.replace(/<\/?[a-zA-Z][^>]*>/g, '');
+  let prev = '';
+  let passes = 0;
+  while (cleaned !== prev && passes < 12) {
+    prev = cleaned;
+    cleaned = cleaned
+      .replace(
+        /<(script|style|iframe|svg|object|embed|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi,
+        '',
+      )
+      .replace(/<!--[\s\S]*?-->/g, '');
+    passes += 1;
+  }
+
+  prev = '';
+  passes = 0;
+  while (cleaned !== prev && passes < 12) {
+    prev = cleaned;
+    cleaned = cleaned.replace(/<\/?[a-zA-Z][^>]*>/g, '');
+    passes += 1;
+  }
 
   return cleaned;
 }

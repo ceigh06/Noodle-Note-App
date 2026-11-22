@@ -26,6 +26,7 @@ import {useHashRoute} from './hooks/useHashRoute';
 import {DiagnosticsPage} from './pages/DiagnosticsPage';
 import {GapAnalysisPage} from './pages/GapAnalysisPage';
 import {OrganizePage} from './pages/OrganizePage';
+import {SettingsPage} from './pages/SettingsPage';
 import {SetupPage} from './pages/SetupPage';
 import {StudyPage} from './pages/StudyPage';
 import {SynthesizerPage} from './pages/SynthesizerPage';
@@ -53,8 +54,10 @@ import {
   deleteNote,
   FolderInspection,
   forgetSavedWorkspace,
+  importDemoPdfSource,
   initializeWorkspaceFolders,
   isFileSystemAccessSupported,
+  loadDemoSourceDocuments,
   pickWorkspaceFolder,
   reconnectSavedWorkspace,
   removeNoteFromAssetsIndex,
@@ -81,9 +84,38 @@ import {
   StoredNoteEntry,
   SuggestedConnection,
   TipTapDoc,
+  VoiceRuntimeState,
+  VoiceSearchSettings,
+  WhisperProgressState,
   WorkspaceConnectionState,
   WorkspaceScanSummary,
 } from './types/noodle';
+import {
+  captureUtteranceAfterWakeWord,
+  EphemeralCaptureHandle,
+  killAllMicrophoneAccess,
+  KillSwitchReport,
+  queryMicrophonePermissionState,
+  startEphemeralMicCapture,
+  subscribeActiveMicrophoneTracks,
+} from './voice/microphoneController';
+import {
+  startPorcupineWakeWord,
+  stopPorcupineWakeWord,
+} from './voice/porcupineWakeWord';
+import {
+  getDefaultVoiceSearchSettings,
+  loadVoiceSearchSettings,
+  matchesPushToTalkHotkey,
+  saveVoiceSearchSettings,
+} from './voice/voiceConfig';
+import {
+  cancelWhisperWork,
+  getWhisperProgressSnapshot,
+  initializeWhisperModel,
+  subscribeWhisperProgress,
+  transcribeEphemeralAudio,
+} from './voice/voiceSearchService';
 
 export default function App() {
   const {route, navigate} = useHashRoute();
@@ -144,6 +176,24 @@ export default function App() {
     useState<ExternalEditConflict | null>(null);
   const [reloadVersion, setReloadVersion] = useState(0);
 
+  // Experimental Voice Search (strictly OFF by default; Porcupine AccessKey held in RAM only)
+  const [voiceSettings, setVoiceSettings] = useState<VoiceSearchSettings>(() =>
+    getDefaultVoiceSearchSettings(),
+  );
+  const [whisperProgress, setWhisperProgress] = useState<WhisperProgressState>(
+    () => getWhisperProgressSnapshot(),
+  );
+  const [porcupineAccessKey, setPorcupineAccessKey] = useState('');
+  const [voiceRuntime, setVoiceRuntime] = useState<VoiceRuntimeState>({
+    phase: 'off',
+    activeTrackCount: 0,
+    micPermissionState: 'unknown',
+    lastTranscript: '',
+    lastError: null,
+    wakeWordActive: false,
+    wakeWordStatusMessage: null,
+  });
+
   const selectedEntryRef = useRef<StoredNoteEntry | null>(null);
   selectedEntryRef.current = selectedEntry;
   const selectedSourceDocRef = useRef<SourceDocumentEntry | null>(null);
@@ -156,6 +206,10 @@ export default function App() {
   aiEnabledRef.current = aiEnabled;
   const embeddingConfigRef = useRef<EmbeddingModelConfig>(embeddingConfig);
   embeddingConfigRef.current = embeddingConfig;
+  const voiceSettingsRef = useRef<VoiceSearchSettings>(voiceSettings);
+  voiceSettingsRef.current = voiceSettings;
+  const activeCaptureRef = useRef<EphemeralCaptureHandle | null>(null);
+  const hotkeyHeldRef = useRef(false);
 
   const triggerIndexSync = useCallback(
     async (
@@ -274,24 +328,54 @@ export default function App() {
     [navigate, refreshDiskNotes, route],
   );
 
-  // Subscribe to local worker progress and load stored embedding metadata
+  // Subscribe to local worker progress and load stored embedding + voice settings
   useEffect(() => {
     const unsubscribe = subscribeEmbeddingProgress(setEmbeddingProgress);
+    const unsubWhisper = subscribeWhisperProgress(setWhisperProgress);
+    const unsubTracks = subscribeActiveMicrophoneTracks((activeTrackCount) => {
+      setVoiceRuntime((prev) => ({...prev, activeTrackCount}));
+    });
     void getStoredEmbeddingConfig().then((cfg) => {
       setEmbeddingConfig(cfg);
       embeddingConfigRef.current = cfg;
     });
-    return unsubscribe;
+    void loadVoiceSearchSettings().then((vs) => {
+      setVoiceSettings(vs);
+      voiceSettingsRef.current = vs;
+      setVoiceRuntime((prev) => ({
+        ...prev,
+        phase: vs.experimentalVoiceEnabled ? 'idle' : 'off',
+      }));
+    });
+    void queryMicrophonePermissionState().then((perm) => {
+      setVoiceRuntime((prev) => ({...prev, micPermissionState: perm}));
+    });
+    return () => {
+      unsubscribe();
+      unsubWhisper();
+      unsubTracks();
+    };
   }, []);
 
   // Restore saved workspace handle from IndexedDB on boot
   useEffect(() => {
     let cancelled = false;
+    async function activateDemoWorkspace(
+      nextState: WorkspaceConnectionState,
+    ): Promise<void> {
+      const demoSources = await loadDemoSourceDocuments().catch(() => []);
+      if (cancelled) {
+        return;
+      }
+      setSourceDocuments(demoSources);
+      setConnectionState(nextState);
+      void triggerIndexSync(DEMO_NOTES, demoSources);
+    }
+
     async function boot() {
       if (!isFileSystemAccessSupported()) {
         if (!cancelled) {
-          setConnectionState('unsupported');
-          void triggerIndexSync(DEMO_NOTES, []);
+          await activateDemoWorkspace('unsupported');
         }
         return;
       }
@@ -302,8 +386,7 @@ export default function App() {
           return;
         }
         if (!restored) {
-          setConnectionState('unselected');
-          void triggerIndexSync(DEMO_NOTES, []);
+          await activateDemoWorkspace('unselected');
           return;
         }
 
@@ -332,8 +415,7 @@ export default function App() {
         }
       } catch {
         if (!cancelled) {
-          setConnectionState('unselected');
-          void triggerIndexSync(DEMO_NOTES, []);
+          await activateDemoWorkspace('unselected');
         }
       }
     }
@@ -461,7 +543,8 @@ export default function App() {
     setTargetBlockId(null);
     setExternalConflict(null);
     setScanProblems([]);
-    setSourceDocuments([]);
+    const demoSources = await loadDemoSourceDocuments().catch(() => []);
+    setSourceDocuments(demoSources);
     setLocalSearchQuery('');
     setSearchResults([]);
     setBacklinks([]);
@@ -470,7 +553,7 @@ export default function App() {
     setConnectionState(
       isFileSystemAccessSupported() ? 'unselected' : 'unsupported',
     );
-    void triggerIndexSync(DEMO_NOTES, []);
+    void triggerIndexSync(DEMO_NOTES, demoSources);
   };
 
   const pillarCounts = useMemo(
@@ -593,6 +676,27 @@ export default function App() {
     setSelectedSourceDoc(null);
     setTargetBlockId(null);
     setSelectedEntry(created);
+    if (route !== '/workspace') {
+      navigate('/workspace');
+    }
+  };
+
+  const handleImportDemoPdf = async (file: File) => {
+    if (connectionState === 'connected') {
+      return;
+    }
+    const addedDoc = await importDemoPdfSource(file);
+    const nextSources = [
+      addedDoc,
+      ...sourceDocumentsRef.current.filter((d) => d.id !== addedDoc.id),
+    ];
+    setSourceDocuments(nextSources);
+    void triggerIndexSync(notesRef.current, nextSources);
+    setActivePillar('sources');
+    setActiveCategory('All');
+    setSelectedEntry(null);
+    setTargetBlockId(null);
+    setSelectedSourceDoc(addedDoc);
     if (route !== '/workspace') {
       navigate('/workspace');
     }
@@ -855,6 +959,421 @@ export default function App() {
     sourceDocuments,
   ]);
 
+  // ---------- EXPERIMENTAL VOICE SEARCH (LOCAL WHISPER WORKER + KILL SWITCH + OPTIONAL PORCUPINE) ----------
+
+  const applyTranscriptToSemanticSearch = useCallback(
+    async (transcript: string) => {
+      const cleaned = transcript.trim();
+      if (!cleaned) {
+        return;
+      }
+      setVoiceRuntime((prev) => ({
+        ...prev,
+        lastTranscript: cleaned,
+        lastError: null,
+      }));
+      setLocalSearchQuery(cleaned);
+      if (route !== '/workspace') {
+        setSelectedEntry(null);
+        setSelectedSourceDoc(null);
+        setTargetBlockId(null);
+        navigate('/workspace');
+      } else if (selectedEntryRef.current || selectedSourceDocRef.current) {
+        setSelectedEntry(null);
+        setSelectedSourceDoc(null);
+        setTargetBlockId(null);
+      }
+    },
+    [navigate, route],
+  );
+
+  const handleUpdateVoiceSettings = useCallback(
+    async (patch: Partial<VoiceSearchSettings>) => {
+      const merged: VoiceSearchSettings = {
+        ...voiceSettingsRef.current,
+        ...patch,
+      };
+      if (!merged.experimentalVoiceEnabled) {
+        merged.wakeWordEnabled = false;
+      }
+      const saved = await saveVoiceSearchSettings(merged);
+      setVoiceSettings(saved);
+      voiceSettingsRef.current = saved;
+      setVoiceRuntime((prev) => ({
+        ...prev,
+        phase: saved.experimentalVoiceEnabled ? 'idle' : 'off',
+        lastError: null,
+      }));
+    },
+    [],
+  );
+
+  const handleDownloadWhisperModel = useCallback(async () => {
+    const current = voiceSettingsRef.current;
+    setVoiceRuntime((prev) => ({
+      ...prev,
+      phase: 'loading-model',
+      lastError: null,
+    }));
+    try {
+      await initializeWhisperModel(
+        current.whisperModelId,
+        current.whisperDownloaded,
+      );
+      const updated = await saveVoiceSearchSettings({
+        ...voiceSettingsRef.current,
+        whisperDownloaded: true,
+      });
+      setVoiceSettings(updated);
+      voiceSettingsRef.current = updated;
+      setVoiceRuntime((prev) => ({
+        ...prev,
+        phase: updated.experimentalVoiceEnabled ? 'idle' : 'off',
+        lastError: null,
+      }));
+    } catch (err) {
+      setVoiceRuntime((prev) => ({
+        ...prev,
+        phase: voiceSettingsRef.current.experimentalVoiceEnabled
+          ? 'error'
+          : 'off',
+        lastError:
+          (err as Error).message || 'Could not initialize Whisper model.',
+      }));
+    }
+  }, []);
+
+  const handleStartPushToTalk = useCallback(async () => {
+    if (!voiceSettingsRef.current.experimentalVoiceEnabled) {
+      return;
+    }
+    if (activeCaptureRef.current) {
+      return;
+    }
+    setVoiceRuntime((prev) => ({
+      ...prev,
+      phase: 'listening',
+      lastError: null,
+    }));
+    try {
+      const handle = await startEphemeralMicCapture();
+      activeCaptureRef.current = handle;
+      const perm = await queryMicrophonePermissionState();
+      setVoiceRuntime((prev) => ({...prev, micPermissionState: perm}));
+    } catch (err) {
+      activeCaptureRef.current = null;
+      hotkeyHeldRef.current = false;
+      setVoiceRuntime((prev) => ({
+        ...prev,
+        phase: 'error',
+        lastError:
+          (err as Error).message || 'Microphone permission denied or unavailable.',
+      }));
+    }
+  }, []);
+
+  const handleStopPushToTalk = useCallback(async () => {
+    const handle = activeCaptureRef.current;
+    hotkeyHeldRef.current = false;
+    if (!handle) {
+      setVoiceRuntime((prev) => ({
+        ...prev,
+        phase: voiceSettingsRef.current.experimentalVoiceEnabled ? 'idle' : 'off',
+      }));
+      return;
+    }
+    activeCaptureRef.current = null;
+
+    setVoiceRuntime((prev) => ({...prev, phase: 'transcribing'}));
+    let samples16k: Float32Array | null = null;
+    try {
+      samples16k = await handle.stopAndExtract16k();
+      if (samples16k.length < 1600) {
+        setVoiceRuntime((prev) => ({
+          ...prev,
+          phase: voiceSettingsRef.current.experimentalVoiceEnabled
+            ? 'idle'
+            : 'off',
+          lastError: 'Hold push-to-talk slightly longer while speaking.',
+        }));
+        return;
+      }
+
+      const transcript = await transcribeEphemeralAudio({
+        samples16k,
+        modelId: voiceSettingsRef.current.whisperModelId,
+      });
+
+      if (!voiceSettingsRef.current.whisperDownloaded) {
+        const saved = await saveVoiceSearchSettings({
+          ...voiceSettingsRef.current,
+          whisperDownloaded: true,
+        });
+        setVoiceSettings(saved);
+        voiceSettingsRef.current = saved;
+      }
+
+      if (transcript) {
+        await applyTranscriptToSemanticSearch(transcript);
+      } else {
+        setVoiceRuntime((prev) => ({
+          ...prev,
+          lastError: 'No speech detected in audio.',
+        }));
+      }
+      setVoiceRuntime((prev) => ({
+        ...prev,
+        phase: voiceSettingsRef.current.experimentalVoiceEnabled
+          ? 'idle'
+          : 'off',
+      }));
+    } catch (err) {
+      setVoiceRuntime((prev) => ({
+        ...prev,
+        phase: voiceSettingsRef.current.experimentalVoiceEnabled
+          ? 'error'
+          : 'off',
+        lastError: (err as Error).message || 'Local Whisper transcription failed.',
+      }));
+    } finally {
+      if (samples16k) {
+        samples16k.fill(0);
+      }
+    }
+  }, [applyTranscriptToSemanticSearch]);
+
+  const handleMasterKillSwitch = useCallback(async (): Promise<KillSwitchReport> => {
+    hotkeyHeldRef.current = false;
+    if (activeCaptureRef.current) {
+      const cap = activeCaptureRef.current;
+      activeCaptureRef.current = null;
+      await cap.discard().catch(() => undefined);
+    }
+    cancelWhisperWork();
+    await stopPorcupineWakeWord().catch(() => undefined);
+    const report = await killAllMicrophoneAccess();
+
+    const offSettings = await saveVoiceSearchSettings({
+      ...voiceSettingsRef.current,
+      experimentalVoiceEnabled: false,
+      wakeWordEnabled: false,
+    });
+    setVoiceSettings(offSettings);
+    voiceSettingsRef.current = offSettings;
+
+    setVoiceRuntime((prev) => ({
+      ...prev,
+      phase: 'off',
+      activeTrackCount: report.remainingActiveTracks,
+      micPermissionState: report.permissionState,
+      wakeWordActive: false,
+      wakeWordStatusMessage: 'Stopped by Master Kill Switch',
+      lastError: null,
+    }));
+    return report;
+  }, []);
+
+  // In-app push-to-talk hotkey listener (strictly active ONLY when experimentalVoiceEnabled is true & tab focused)
+  useEffect(() => {
+    if (!voiceSettings.experimentalVoiceEnabled) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat) {
+        return;
+      }
+      if (
+        matchesPushToTalkHotkey(
+          event,
+          voiceSettingsRef.current.pushToTalkHotkey,
+          event.target,
+        )
+      ) {
+        event.preventDefault();
+        if (!hotkeyHeldRef.current) {
+          hotkeyHeldRef.current = true;
+          void handleStartPushToTalk();
+        }
+      }
+    };
+
+    const releaseHeld = () => {
+      if (hotkeyHeldRef.current || activeCaptureRef.current) {
+        hotkeyHeldRef.current = false;
+        void handleStopPushToTalk();
+      }
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (!hotkeyHeldRef.current) {
+        return;
+      }
+      const parts = voiceSettingsRef.current.pushToTalkHotkey.split('+');
+      const mainKey = parts[parts.length - 1];
+      if (
+        matchesPushToTalkHotkey(
+          event,
+          voiceSettingsRef.current.pushToTalkHotkey,
+        ) ||
+        event.code === mainKey ||
+        event.key === 'Alt' ||
+        event.key === 'Control' ||
+        event.key === 'Shift' ||
+        event.key === 'Meta'
+      ) {
+        releaseHeld();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', releaseHeld);
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', releaseHeld);
+    };
+  }, [
+    handleStartPushToTalk,
+    handleStopPushToTalk,
+    voiceSettings.experimentalVoiceEnabled,
+  ]);
+
+  // Step 2 (Optional): Picovoice Porcupine wake word lifecycle (strictly OFF unless explicitly enabled with AccessKey)
+  useEffect(() => {
+    if (
+      !voiceSettings.experimentalVoiceEnabled ||
+      !voiceSettings.wakeWordEnabled ||
+      !porcupineAccessKey.trim()
+    ) {
+      void stopPorcupineWakeWord().then(() => {
+        setVoiceRuntime((prev) => ({
+          ...prev,
+          wakeWordActive: false,
+          wakeWordStatusMessage: voiceSettings.wakeWordEnabled
+            ? 'Requires AccessKey'
+            : 'Inactive',
+        }));
+      });
+      return;
+    }
+
+    let cancelled = false;
+    setVoiceRuntime((prev) => ({
+      ...prev,
+      wakeWordStatusMessage: `Starting "${voiceSettings.wakeWordKeyword}" wake word…`,
+      lastError: null,
+    }));
+
+    void startPorcupineWakeWord({
+      accessKey: porcupineAccessKey,
+      keyword: voiceSettings.wakeWordKeyword,
+      onDetected: () => {
+        if (cancelled) return;
+        void (async () => {
+          setVoiceRuntime((prev) => ({
+            ...prev,
+            phase: 'listening',
+            wakeWordStatusMessage: `Wake word detected ("${voiceSettings.wakeWordKeyword}"). Listening…`,
+          }));
+          let utterance: Float32Array | null = null;
+          try {
+            utterance = await captureUtteranceAfterWakeWord({
+              maxDurationMs: 4500,
+              silenceWindowMs: 1100,
+            });
+            if (utterance.length >= 1600) {
+              setVoiceRuntime((prev) => ({...prev, phase: 'transcribing'}));
+              const transcript = await transcribeEphemeralAudio({
+                samples16k: utterance,
+                modelId: voiceSettingsRef.current.whisperModelId,
+              });
+              if (transcript) {
+                await applyTranscriptToSemanticSearch(transcript);
+              }
+            }
+          } catch (err) {
+            if (!cancelled) {
+              setVoiceRuntime((prev) => ({
+                ...prev,
+                lastError: (err as Error).message || 'Wake capture failed.',
+              }));
+            }
+          } finally {
+            if (utterance) {
+              utterance.fill(0);
+            }
+            if (!cancelled) {
+              setVoiceRuntime((prev) => ({
+                ...prev,
+                phase: voiceSettingsRef.current.experimentalVoiceEnabled
+                  ? 'wake-listening'
+                  : 'off',
+                wakeWordStatusMessage: `Listening for "${voiceSettingsRef.current.wakeWordKeyword}"`,
+              }));
+            }
+          }
+        })();
+      },
+      onError: (msg) => {
+        if (!cancelled) {
+          setVoiceRuntime((prev) => ({
+            ...prev,
+            wakeWordActive: false,
+            lastError: msg,
+            wakeWordStatusMessage: 'Wake word error',
+          }));
+        }
+      },
+    })
+      .then(async () => {
+        if (cancelled) {
+          await stopPorcupineWakeWord();
+          return;
+        }
+        const perm = await queryMicrophonePermissionState();
+        setVoiceRuntime((prev) => ({
+          ...prev,
+          phase: 'wake-listening',
+          micPermissionState: perm,
+          wakeWordActive: true,
+          wakeWordStatusMessage: `Listening for "${voiceSettings.wakeWordKeyword}"`,
+          lastError: null,
+        }));
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setVoiceRuntime((prev) => ({
+            ...prev,
+            wakeWordActive: false,
+            lastError:
+              (err as Error).message || 'Failed to start Porcupine wake word.',
+            wakeWordStatusMessage: 'Failed to start',
+          }));
+          void saveVoiceSearchSettings({
+            ...voiceSettingsRef.current,
+            wakeWordEnabled: false,
+          }).then((saved) => {
+            setVoiceSettings(saved);
+            voiceSettingsRef.current = saved;
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      void stopPorcupineWakeWord();
+    };
+  }, [
+    applyTranscriptToSemanticSearch,
+    porcupineAccessKey,
+    voiceSettings.experimentalVoiceEnabled,
+    voiceSettings.wakeWordEnabled,
+    voiceSettings.wakeWordKeyword,
+  ]);
+
   const activeDocMeta = useMemo(() => {
     if (selectedEntry) {
       return {
@@ -1053,7 +1572,7 @@ export default function App() {
               }}
             />
 
-            <main className="flex-1 overflow-y-auto">
+            <main className="min-h-0 flex-1 overflow-y-auto">
               {route === '/workspace' && selectedSourceDoc ? (
                 <SourceDocumentView
                   doc={selectedSourceDoc}
@@ -1125,6 +1644,13 @@ export default function App() {
                   aiEnabled={aiEnabled}
                   embeddingConfig={embeddingConfig}
                   embeddingProgress={embeddingProgress}
+                  voiceSettings={voiceSettings}
+                  voiceRuntime={voiceRuntime}
+                  whisperProgress={whisperProgress}
+                  onStartPushToTalk={() => void handleStartPushToTalk()}
+                  onStopPushToTalk={() => void handleStopPushToTalk()}
+                  onMasterKillSwitch={() => void handleMasterKillSwitch()}
+                  onNavigate={navigate}
                   connectionState={connectionState}
                   folderName={folderName}
                   busy={workspaceBusy}
@@ -1156,6 +1682,7 @@ export default function App() {
                   onChangeModelId={(id) => void handleChangeModelId(id)}
                   onOpenNewNote={() => setNewNoteOpen(true)}
                   onImportMarkdown={handleImportMarkdown}
+                  onImportDemoPdf={handleImportDemoPdf}
                   onReconnect={handleReconnect}
                   onRescan={() => void runWorkspaceScan('manual', {force: true})}
                   onSelectFolder={handleSelectFolder}
@@ -1203,6 +1730,20 @@ export default function App() {
               )}
               {route === '/workspace/trust-tuning' && (
                 <TrustTuningPage onNavigate={navigate} />
+              )}
+              {route === '/settings' && (
+                <SettingsPage
+                  voiceSettings={voiceSettings}
+                  voiceRuntime={voiceRuntime}
+                  whisperProgress={whisperProgress}
+                  porcupineAccessKey={porcupineAccessKey}
+                  onChangePorcupineAccessKey={setPorcupineAccessKey}
+                  onUpdateVoiceSettings={handleUpdateVoiceSettings}
+                  onMasterKillSwitch={handleMasterKillSwitch}
+                  onDownloadWhisperModel={handleDownloadWhisperModel}
+                  onCancelWhisperWork={cancelWhisperWork}
+                  onNavigate={navigate}
+                />
               )}
               {route === '/diagnostics' && (
                 <DiagnosticsPage
