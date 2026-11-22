@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  cancelChatPreview,
+  executeApprovedChatQuery,
+  extractRelevantNoteExcerpts,
+  formatChatAsAiNote,
+  parseCitedBlockIds,
+  prepareChatPreview,
+} from '../../cloud/chatService';
+import {
   decryptApiKeyWithPassphrase,
   encryptApiKeyWithPassphrase,
   redactSecretFromText,
@@ -910,5 +918,280 @@ test('parseAndValidateSynthesisOutput rejects malformed responses and builds Tip
   assert.equal(built.aiMeta.sourcesUsed[0].blockId, 'blk-calc-1');
   assert.ok(typeof built.blockIdByCitationNumber.get(1) === 'string');
 });
+
+test('extractRelevantNoteExcerpts selects only relevant blocks and preserves block IDs', () => {
+  const sampleNote: StoredNoteEntry = {
+    fileName: 'dna.json',
+    pillar: 'manual',
+    path: 'manual/dna.json',
+    excerpt: 'DNA transcription note',
+    wordCount: 40,
+    note: {
+      id: 'note-bio-1',
+      schemaVersion: 1,
+      title: 'Molecular Genetics',
+      category: 'Study',
+      pillar: 'manual',
+      createdAt: '2026-11-22T00:00:00.000Z',
+      updatedAt: '2026-11-22T00:00:00.000Z',
+      contentHash: 'hash-bio-1',
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'heading',
+            attrs: {id: 'blk-dna-h1', level: 1},
+            content: [{type: 'text', text: 'Central Dogma'}],
+          },
+          {
+            type: 'paragraph',
+            attrs: {id: 'blk-dna-p1'},
+            content: [
+              {
+                type: 'text',
+                text: 'DNA helicase unzips the double helix during replication.',
+              },
+            ],
+          },
+          {
+            type: 'paragraph',
+            attrs: {id: 'blk-dna-p2'},
+            content: [
+              {
+                type: 'text',
+                text: 'RNA polymerase synthesizes messenger RNA from the template strand.',
+              },
+            ],
+          },
+          {
+            type: 'paragraph',
+            attrs: {id: 'blk-dna-secret'},
+            content: [
+              {
+                type: 'text',
+                text: 'UNRETRIEVED_PRIVATE_STORY_AND_JOURNAL_DETAILS',
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+
+  const excerpts = extractRelevantNoteExcerpts(sampleNote, 'RNA polymerase template', 1);
+  assert.equal(excerpts.length, 1);
+  assert.equal(excerpts[0].blockId, 'blk-dna-p2');
+  assert.ok(excerpts[0].text.includes('RNA polymerase'));
+  assert.ok(!excerpts[0].text.includes('UNRETRIEVED_PRIVATE_STORY_AND_JOURNAL_DETAILS'));
+  assert.equal(excerpts[0].noteId, 'note-bio-1');
+  assert.equal(excerpts[0].sourceTitle, 'Molecular Genetics');
+});
+
+test('parseCitedBlockIds extracts explicit [block: <id>] and maps numeric citations', () => {
+  const excerpts: CloudRetrievedExcerpt[] = [
+    {
+      citationNumber: 1,
+      chunkId: 'n1::b1',
+      noteId: 'n1',
+      blockId: 'blk-helices-1',
+      kind: 'note',
+      pillar: 'manual',
+      sourceTitle: 'Biology',
+      sourcePath: 'manual/bio.json',
+      headingPath: [],
+      text: 'Alpha helices are coiled secondary structures.',
+      score: 0.9,
+      scoreLabel: 'word match',
+    },
+    {
+      citationNumber: 2,
+      chunkId: 'n1::b2',
+      noteId: 'n1',
+      blockId: 'blk-sheets-2',
+      kind: 'note',
+      pillar: 'manual',
+      sourceTitle: 'Biology',
+      sourcePath: 'manual/bio.json',
+      headingPath: [],
+      text: 'Beta pleated sheets form planar arrays.',
+      score: 0.85,
+      scoreLabel: 'word match',
+    },
+  ];
+
+  const parsed1 = parseCitedBlockIds(
+    'Alpha helices coil [block: blk-helices-1] and beta sheets lay flat [block: blk-sheets-2].',
+    excerpts,
+  );
+  assert.deepEqual(parsed1.citedBlockIds, ['blk-helices-1', 'blk-sheets-2']);
+  assert.equal(parsed1.citations.length, 2);
+
+  const parsed2 = parseCitedBlockIds(
+    'Alpha helices are coiled structures [1] while beta sheets form planar arrays [2].',
+    excerpts,
+  );
+  assert.deepEqual(parsed2.citedBlockIds, ['blk-helices-1', 'blk-sheets-2']);
+});
+
+test('AI Chat privacy gate blocks unapproved requests, blocks replay, and preserves memory-only until saved to ai/', async () => {
+  const excerpt: CloudRetrievedExcerpt = {
+    citationNumber: 1,
+    chunkId: 'n1::b1',
+    noteId: 'note-chem-1',
+    blockId: 'blk-atom-1',
+    kind: 'note',
+    pillar: 'manual',
+    sourceTitle: 'Chemistry Lecture',
+    sourcePath: 'manual/chem.json',
+    headingPath: ['Atomic Structure'],
+    text: 'Electrons occupy quantized orbitals around the dense nucleus.',
+    score: 0.95,
+    scoreLabel: 'word match',
+  };
+
+  const preview = prepareChatPreview({
+    provider: 'gemini',
+    question: 'Where do electrons live?',
+    excerpts: [excerpt],
+  });
+
+  // 1. Mandatory Privacy Notice enforcement: unapproved call MUST throw
+  await assert.rejects(
+    () =>
+      executeApprovedChatQuery({
+        preview,
+        userApprovedNotice: false,
+        apiKeyOverride: 'test-key',
+      }),
+    /Privacy notice approval is required/,
+  );
+
+  let capturedPrompt = '';
+  const mockAdapter = {
+    ...getProviderAdapter('gemini'),
+    async synthesizeFromExcerpts(p: {
+      apiKey: string;
+      model?: string;
+      question: string;
+      excerpts: CloudRetrievedExcerpt[];
+    }) {
+      capturedPrompt = `${p.question}\n${p.excerpts.map((e) => e.text).join('\n')}`;
+      return {
+        provider: 'gemini' as const,
+        model: 'gemini-2.5-flash',
+        question: p.question,
+        answerText: 'Electrons occupy quantized orbitals [block: blk-atom-1].',
+        citedNumbers: [1],
+        citations: [
+          {
+            citationNumber: 1,
+            noteId: 'note-chem-1',
+            blockId: 'blk-atom-1',
+            kind: 'note' as const,
+            pillar: 'manual' as const,
+            sourceTitle: 'Chemistry Lecture',
+            headingPath: ['Atomic Structure'],
+            excerpt: 'Electrons occupy quantized orbitals around the dense nucleus.',
+          },
+        ],
+        createdAt: new Date().toISOString(),
+      };
+    },
+  };
+
+  // 2. Approved call succeeds and includes block citation directive
+  const res = await executeApprovedChatQuery({
+    preview,
+    userApprovedNotice: true,
+    apiKeyOverride: 'test-key',
+    adapterOverride: mockAdapter,
+  });
+
+  assert.ok(res.citedBlockIds.includes('blk-atom-1'));
+  assert.ok(capturedPrompt.includes('Electrons occupy quantized orbitals'));
+  assert.ok(capturedPrompt.includes('[block: <blockId>]'));
+
+  // 3. Replay attack blocked
+  await assert.rejects(
+    () =>
+      executeApprovedChatQuery({
+        preview,
+        userApprovedNotice: true,
+        apiKeyOverride: 'test-key',
+        adapterOverride: mockAdapter,
+      }),
+    /already sent or cancelled/,
+  );
+
+  // 4. Cancelled preview blocked
+  const preview2 = prepareChatPreview({
+    provider: 'gemini',
+    question: 'Cancelled question',
+    excerpts: [excerpt],
+  });
+  cancelChatPreview(preview2.requestId);
+  await assert.rejects(
+    () =>
+      executeApprovedChatQuery({
+        preview: preview2,
+        userApprovedNotice: true,
+        apiKeyOverride: 'test-key',
+        adapterOverride: mockAdapter,
+      }),
+    /already sent or cancelled/,
+  );
+
+  // 5. Save conversation into ai/ formatting
+  const sampleNote: StoredNoteEntry = {
+    fileName: 'chem.json',
+    pillar: 'manual',
+    path: 'manual/chem.json',
+    excerpt: 'Chemistry note',
+    wordCount: 30,
+    note: {
+      id: 'note-chem-1',
+      schemaVersion: 1,
+      title: 'Chemistry Lecture',
+      category: 'Study',
+      pillar: 'manual',
+      createdAt: '2026-11-22T00:00:00.000Z',
+      updatedAt: '2026-11-22T00:00:00.000Z',
+      contentHash: 'hash-chem',
+      content: {
+        type: 'doc',
+        content: [],
+      },
+    },
+  };
+
+  const formattedAiNote = formatChatAsAiNote({
+    activeNote: sampleNote,
+    messages: [
+      {
+        id: '1',
+        role: 'user',
+        text: 'Where do electrons live?',
+        timestamp: '10:00 AM',
+      },
+      {
+        id: '2',
+        role: 'assistant',
+        text: 'Electrons occupy quantized orbitals [block: blk-atom-1].',
+        citedBlockIds: ['blk-atom-1'],
+        citations: res.citations,
+        timestamp: '10:01 AM',
+      },
+    ],
+    provider: 'gemini',
+    model: 'gemini-2.5-flash',
+  });
+
+  assert.equal(formattedAiNote.targetPillar, 'ai');
+  assert.ok(formattedAiNote.title.includes('AI Chat: Chemistry Lecture'));
+  assert.equal(formattedAiNote.aiMeta.isAiGenerated, true);
+  assert.equal(formattedAiNote.aiMeta.sourcesUsed[0].blockId, 'blk-atom-1');
+  assert.ok(formattedAiNote.content.content.length >= 3);
+});
+
 
 

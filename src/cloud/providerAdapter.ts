@@ -144,7 +144,8 @@ export function buildExcerptSynthesisPrompt(
     .map((ex) => {
       const section =
         ex.headingPath.length > 0 ? ` (${ex.headingPath.join(' › ')})` : '';
-      return `[${ex.citationNumber}] Source: "${ex.sourceTitle}" (${ex.pillar})${section}\nExcerpt: ${ex.text}`;
+      const blockPart = ex.blockId ? ` [block: ${ex.blockId}]` : '';
+      return `[${ex.citationNumber}] Source: "${ex.sourceTitle}" (${ex.pillar})${section}${blockPart}\nExcerpt: ${ex.text}`;
     })
     .join('\n\n');
 
@@ -155,7 +156,7 @@ export function buildExcerptSynthesisPrompt(
   const baseSystem =
     'You are a study-notes synthesizer. Answer the student task using ONLY the provided sanitized excerpts. ' +
     retentionDirective +
-    'Cite supporting excerpts inline using bracketed numbers like [1] or [2]. ' +
+    'Cite supporting excerpts inline using bracketed numbers like [1] or specific block IDs like [block: <blockId>]. ' +
     'If the excerpts lack information needed for part of the task, state that gap plainly instead of inventing facts.';
 
   if (!outputFormat) {

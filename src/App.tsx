@@ -5,6 +5,7 @@ import {
   NonEmptyFolderModal,
 } from './components/Modals';
 import {MiniNotebook} from './components/MiniNotebook';
+import {AiChatPanel} from './components/AiChatPanel';
 import {NoteEditorView} from './components/NoteEditorView';
 import {Sidebar} from './components/Sidebar';
 import {SourceDocumentView} from './components/SourceDocumentView';
@@ -120,6 +121,7 @@ export default function App() {
   const [embeddingProgress, setEmbeddingProgress] =
     useState<EmbeddingProgressState>(() => getEmbeddingProgressSnapshot());
   const [miniNotebookOpen, setMiniNotebookOpen] = useState(false);
+  const [aiChatOpen, setAiChatOpen] = useState(false);
   const [newNoteOpen, setNewNoteOpen] = useState(false);
   const [keySetupOpen, setKeySetupOpen] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState<StoredNoteEntry | null>(
@@ -1034,6 +1036,8 @@ export default function App() {
               onToggleAi={() => setAiEnabled((prev) => !prev)}
               miniNotebookOpen={miniNotebookOpen}
               onToggleMiniNotebook={() => setMiniNotebookOpen((prev) => !prev)}
+              aiChatOpen={aiChatOpen}
+              onToggleAiChat={() => setAiChatOpen((prev) => !prev)}
               onOpenKeySetup={() => setKeySetupOpen(true)}
               onOpenNewNote={() => setNewNoteOpen(true)}
               onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
@@ -1080,6 +1084,8 @@ export default function App() {
                       ? externalConflict
                       : null
                   }
+                  aiChatOpen={aiChatOpen}
+                  onToggleAiChat={() => setAiChatOpen((prev) => !prev)}
                   backlinks={backlinks}
                   suggestions={suggestions}
                   suggestionMode={suggestionMode}
@@ -1194,6 +1200,15 @@ export default function App() {
                 />
               )}
             </main>
+
+            <AiChatPanel
+              isOpen={aiChatOpen}
+              onClose={() => setAiChatOpen(false)}
+              activeNote={selectedEntry}
+              onNavigateToBlock={handleNavigateToBlock}
+              onSaveToAi={handleSaveAiNote}
+              onOpenKeySetup={() => setKeySetupOpen(true)}
+            />
           </div>
 
           <MiniNotebook

@@ -36,6 +36,13 @@ import {
   prepareCloudSynthesisPreview,
   validateAndPersistAiSynthesisResult,
 } from './synthesisService';
+import {
+  cancelChatPreview,
+  executeApprovedChatQuery,
+  extractRelevantNoteExcerpts,
+  parseCitedBlockIds,
+  prepareChatPreview,
+} from './chatService';
 import {filterWebCitationsByWhitelist} from './trustSettings';
 
 export async function runCloudDiagnostics(): Promise<DiagnosticCheckResult[]> {
@@ -301,6 +308,202 @@ export async function runCloudDiagnostics(): Promise<DiagnosticCheckResult[]> {
       results.push({
         id: 'cloud-privacy-notice-gate',
         name: 'Privacy Notice Required Every Call (Excerpts Only)',
+        status: 'FAIL',
+        details: (err as Error).message,
+        durationMs: Math.round(performance.now() - start),
+      });
+    }
+  }
+
+  // 3b. AI Chat: Mandatory Privacy Notice on EVERY call & excerpt-only payload check (no note content without notice)
+  {
+    const start = performance.now();
+    try {
+      const sampleActiveNote: StoredNoteEntry = {
+        fileName: 'note-1.json',
+        pillar: 'manual',
+        path: 'manual/note-1.json',
+        excerpt: 'Relevant block content.',
+        wordCount: 20,
+        note: {
+          id: 'chat-test-note-1',
+          schemaVersion: 1,
+          title: 'Quantum Computing Lecture',
+          category: 'Study',
+          pillar: 'manual',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          contentHash: 'hash1',
+          content: {
+            type: 'doc',
+            content: [
+              {
+                type: 'heading',
+                attrs: {id: 'blk-heading-1', level: 1},
+                content: [{type: 'text', text: 'Quantum Entanglement'}],
+              },
+              {
+                type: 'paragraph',
+                attrs: {id: 'blk-p-1'},
+                content: [
+                  {
+                    type: 'text',
+                    text: 'Entangled qubits exhibit non-local state correlations.',
+                  },
+                ],
+              },
+              {
+                type: 'paragraph',
+                attrs: {id: 'blk-p-secret'},
+                content: [
+                  {
+                    type: 'text',
+                    text: 'UNRETRIEVED_PRIVATE_IRRELEVANT_BLOCK_DATA',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      };
+
+      // Extract relevant excerpts for a specific question
+      const excerpts = extractRelevantNoteExcerpts(
+        sampleActiveNote,
+        'What are entangled qubits?',
+        1,
+      );
+
+      // Verify only relevant excerpt is chosen, NOT unretrieved irrelevant block
+      const hasIrrelevant = excerpts.some((e) =>
+        e.text.includes('UNRETRIEVED_PRIVATE_IRRELEVANT_BLOCK_DATA'),
+      );
+      const hasRelevant = excerpts.some(
+        (e) => e.blockId === 'blk-p-1' && e.text.includes('Entangled qubits'),
+      );
+
+      const preview = prepareChatPreview({
+        provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        question: 'What are entangled qubits?',
+        excerpts,
+      });
+
+      // 1. Unapproved call MUST fail (no note content is sent without the notice)
+      let unapprovedBlocked = false;
+      try {
+        await executeApprovedChatQuery({
+          preview,
+          userApprovedNotice: false,
+          apiKeyOverride: fakeGoogleKey,
+        });
+      } catch {
+        unapprovedBlocked = true;
+      }
+
+      // 2. Approved call succeeds, transmits ONLY relevant excerpts, and returns block citations
+      let capturedChatRequestBody = '';
+      const mockChatAdapter = {
+        ...getProviderAdapter('gemini'),
+        async synthesizeFromExcerpts(p: {
+          apiKey: string;
+          model?: string;
+          question: string;
+          excerpts: typeof excerpts;
+        }) {
+          capturedChatRequestBody = `${p.question}\n${p.excerpts.map((e) => e.text).join('\n')}`;
+          return {
+            provider: 'gemini' as const,
+            model: p.model || 'gemini-2.5-flash',
+            question: p.question,
+            answerText:
+              'Entangled qubits share non-local state correlations as defined in [block: blk-p-1].',
+            citedNumbers: [1],
+            citations: [
+              {
+                citationNumber: 1,
+                noteId: 'chat-test-note-1',
+                blockId: 'blk-p-1',
+                kind: 'note' as const,
+                pillar: 'manual' as const,
+                sourceTitle: 'Quantum Computing Lecture',
+                headingPath: ['Quantum Entanglement'],
+                excerpt: 'Entangled qubits exhibit non-local state correlations.',
+              },
+            ],
+            createdAt: new Date().toISOString(),
+          };
+        },
+      };
+
+      const res = await executeApprovedChatQuery({
+        preview,
+        userApprovedNotice: true,
+        apiKeyOverride: fakeGoogleKey,
+        adapterOverride: mockChatAdapter,
+      });
+
+      // 3. Replay attack must be blocked
+      let replayBlocked = false;
+      try {
+        await executeApprovedChatQuery({
+          preview,
+          userApprovedNotice: true,
+          apiKeyOverride: fakeGoogleKey,
+          adapterOverride: mockChatAdapter,
+        });
+      } catch {
+        replayBlocked = true;
+      }
+
+      // 4. Cancelled preview cannot be sent
+      const previewCancel = prepareChatPreview({
+        provider: 'gemini',
+        question: 'Second question',
+        excerpts,
+      });
+      cancelChatPreview(previewCancel.requestId);
+      let cancelBlocked = false;
+      try {
+        await executeApprovedChatQuery({
+          preview: previewCancel,
+          userApprovedNotice: true,
+          apiKeyOverride: fakeGoogleKey,
+          adapterOverride: mockChatAdapter,
+        });
+      } catch {
+        cancelBlocked = true;
+      }
+
+      const citesBlockId = res.citedBlockIds.includes('blk-p-1');
+      const payloadExcludesSecret =
+        !capturedChatRequestBody.includes('UNRETRIEVED_PRIVATE_IRRELEVANT_BLOCK_DATA');
+      const payloadIncludesRelevant =
+        capturedChatRequestBody.includes('Entangled qubits exhibit non-local state correlations.');
+
+      const passed =
+        !hasIrrelevant &&
+        hasRelevant &&
+        unapprovedBlocked &&
+        replayBlocked &&
+        cancelBlocked &&
+        citesBlockId &&
+        payloadExcludesSecret &&
+        payloadIncludesRelevant;
+
+      results.push({
+        id: 'chat-privacy-notice-gate',
+        name: 'AI Chat: Privacy Notice Gate (No Content Sent Without Notice)',
+        status: passed ? 'PASS' : 'FAIL',
+        details: passed
+          ? 'Enforced mandatory privacy notice approval on every chat query, verified only relevant excerpts are transmitted with block citations, and blocked unapproved/replayed calls.'
+          : 'Privacy notice check for AI chat did not enforce gating or block-citing behavior as expected.',
+        durationMs: Math.round(performance.now() - start),
+      });
+    } catch (err) {
+      results.push({
+        id: 'chat-privacy-notice-gate',
+        name: 'AI Chat: Privacy Notice Gate (No Content Sent Without Notice)',
         status: 'FAIL',
         details: (err as Error).message,
         durationMs: Math.round(performance.now() - start),

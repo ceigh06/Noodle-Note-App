@@ -35,6 +35,7 @@ import {
   Quote,
   Redo2,
   RemoveFormatting,
+  Sparkles,
   Strikethrough,
   Table as TableIcon,
   Trash2,
@@ -90,6 +91,8 @@ interface NoteEditorViewProps {
   targetBlockId?: string | null;
   reloadVersion?: number;
   externalConflict?: ExternalEditConflict | null;
+  aiChatOpen?: boolean;
+  onToggleAiChat?: () => void;
   backlinks?: BacklinkRecord[];
   suggestions?: SuggestedConnection[];
   suggestionMode?: 'semantic' | 'word-match';
@@ -125,6 +128,8 @@ export function NoteEditorView({
   targetBlockId = null,
   reloadVersion = 0,
   externalConflict = null,
+  aiChatOpen = false,
+  onToggleAiChat,
   backlinks = [],
   suggestions = [],
   suggestionMode = 'word-match',
@@ -749,6 +754,23 @@ export function NoteEditorView({
                         : 'Ready'}
                 </span>
               </span>
+            )}
+
+            {onToggleAiChat && (
+              <button
+                type="button"
+                onClick={onToggleAiChat}
+                aria-pressed={aiChatOpen}
+                title="Toggle AI Note Chat Panel"
+                className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  aiChatOpen
+                    ? 'border-[#E0A83E]/50 bg-[#E0A83E]/15 text-[#F3CA77]'
+                    : 'border-[#272C3A] bg-[#171A22] text-[#C8CCD6] hover:border-[#3A4154] hover:text-[#F4F0E7]'
+                }`}
+              >
+                <Sparkles className="h-3.5 w-3.5 text-[#E0A83E]" />
+                <span className="hidden sm:inline">AI Chat</span>
+              </button>
             )}
 
             <button

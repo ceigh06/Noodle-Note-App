@@ -3,10 +3,12 @@ import {
   Folder,
   KeyRound,
   Menu,
+  MessageSquare,
   NotebookPen,
   Plus,
   RefreshCw,
   Search,
+  Sparkles,
   X,
 } from 'lucide-react';
 import {RoutePath, WorkspaceConnectionState} from '../types/noodle';
@@ -21,6 +23,8 @@ interface TopBarProps {
   onToggleAi: () => void;
   miniNotebookOpen: boolean;
   onToggleMiniNotebook: () => void;
+  aiChatOpen?: boolean;
+  onToggleAiChat?: () => void;
   onOpenKeySetup: () => void;
   onOpenNewNote: () => void;
   onOpenMobileSidebar: () => void;
@@ -39,6 +43,8 @@ export function TopBar({
   onToggleAi,
   miniNotebookOpen,
   onToggleMiniNotebook,
+  aiChatOpen = false,
+  onToggleAiChat,
   onOpenKeySetup,
   onOpenNewNote,
   onOpenMobileSidebar,
@@ -168,6 +174,23 @@ export function TopBar({
           <NotebookPen className="h-3.5 w-3.5" />
           <span className="hidden xl:inline">Mini-Notebook</span>
         </button>
+
+        {onToggleAiChat && (
+          <button
+            type="button"
+            onClick={onToggleAiChat}
+            aria-pressed={aiChatOpen}
+            title="Toggle AI Note Chat Panel"
+            className={`flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60 ${
+              aiChatOpen
+                ? 'border-[#E0A83E]/40 bg-[#E0A83E]/12 text-[#F0C875]'
+                : 'border-[#252936] bg-[#171A22] text-[#B8BDC9] hover:border-[#353B4C] hover:text-[#ECEBE6]'
+            }`}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-[#E0A83E]" />
+            <span className="hidden xl:inline">AI Chat</span>
+          </button>
+        )}
 
         <button
           type="button"
