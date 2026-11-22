@@ -17,6 +17,7 @@ export type RoutePath =
   | '/workspace'
   | '/workspace/study'
   | '/workspace/synthesizer'
+  | '/workspace/gap-analysis'
   | '/workspace/trust-tuning'
   | '/workspace/organize'
   | '/settings'
@@ -505,3 +506,33 @@ export const CATEGORY_STYLE: Record<
     activeBorder: 'border-teal-400/50',
   },
 };
+
+export interface ExtractedSyllabusTopic {
+  id: string;
+  name: string;
+  description: string;
+  entities: string[];
+}
+
+export interface SyllabusTopicCoverageResult {
+  topic: ExtractedSyllabusTopic;
+  coverage: 'zero' | 'weak' | 'covered';
+  bestScore: number;
+  scoreLabel: ScoreLabel;
+  knowledgeGap: boolean;
+  bestMatches: SearchResultItem[];
+}
+
+export interface GapAnalysisReport {
+  id: string;
+  courseTitle: string;
+  analyzedAt: string;
+  syllabusSnippet: string;
+  thresholdUsed: number;
+  totalTopics: number;
+  zeroCoverageCount: number;
+  weakCoverageCount: number;
+  coveredCount: number;
+  topics: SyllabusTopicCoverageResult[];
+}
+

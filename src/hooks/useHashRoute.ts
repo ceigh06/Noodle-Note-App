@@ -6,6 +6,9 @@ const VALID_ROUTES: RoutePath[] = [
   '/workspace',
   '/workspace/study',
   '/workspace/synthesizer',
+  '/workspace/gap-analysis',
+  '/workspace/organize',
+  '/workspace/trust-tuning',
   '/settings',
   '/diagnostics',
 ];

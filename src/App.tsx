@@ -24,6 +24,7 @@ import {
 import {extractPlainText} from './editor/plainText';
 import {useHashRoute} from './hooks/useHashRoute';
 import {DiagnosticsPage} from './pages/DiagnosticsPage';
+import {GapAnalysisPage} from './pages/GapAnalysisPage';
 import {OrganizePage} from './pages/OrganizePage';
 import {SetupPage} from './pages/SetupPage';
 import {StudyPage} from './pages/StudyPage';
@@ -1178,6 +1179,17 @@ export default function App() {
                   onNavigateToBlock={handleNavigateToBlock}
                   onSaveAiNote={handleSaveAiNote}
                   onNavigate={navigate}
+                />
+              )}
+              {route === '/workspace/gap-analysis' && (
+                <GapAnalysisPage
+                  notes={notes}
+                  sourceDocuments={sourceDocuments}
+                  aiEnabled={aiEnabled}
+                  onNavigate={navigate}
+                  onNavigateToBlock={handleNavigateToBlock}
+                  onOpenNewNote={() => setNewNoteOpen(true)}
+                  onOpenKeySetup={() => setKeySetupOpen(true)}
                 />
               )}
               {route === '/workspace/organize' && (

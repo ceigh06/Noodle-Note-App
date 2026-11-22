@@ -9,6 +9,14 @@ import {
   prepareChatPreview,
 } from '../../cloud/chatService';
 import {
+  buildGapAnalysisReport,
+  cancelSyllabusPreview,
+  executeApprovedSyllabusExtraction,
+  mapTopicsAgainstLocalIndex,
+  parseSyllabusTopicsResponse,
+  prepareSyllabusPreview,
+} from '../../cloud/gapAnalysisService';
+import {
   decryptApiKeyWithPassphrase,
   encryptApiKeyWithPassphrase,
   redactSecretFromText,
@@ -1192,6 +1200,198 @@ test('AI Chat privacy gate blocks unapproved requests, blocks replay, and preser
   assert.equal(formattedAiNote.aiMeta.sourcesUsed[0].blockId, 'blk-atom-1');
   assert.ok(formattedAiNote.content.content.length >= 3);
 });
+
+test('parseSyllabusTopicsResponse extracts course title and topics from raw/fenced JSON', () => {
+  const jsonWithFences = `\`\`\`json
+{
+  "courseTitle": "Intro to Operating Systems",
+  "topics": [
+    {
+      "id": "t-threads",
+      "name": "Kernel vs User Threads",
+      "description": "Concurrency primitives, context switches, and PCB state.",
+      "entities": ["mutex", "semaphore", "spinlocks"]
+    },
+    {
+      "id": "t-vm",
+      "name": "Virtual Memory & Paging",
+      "description": "TLB misses, page tables, and demand paging.",
+      "entities": ["TLB", "inverted page table", "dirty bit"]
+    }
+  ]
+}
+\`\`\``;
+
+  const parsed = parseSyllabusTopicsResponse(jsonWithFences);
+  assert.equal(parsed.courseTitle, 'Intro to Operating Systems');
+  assert.equal(parsed.topics.length, 2);
+  assert.equal(parsed.topics[0].id, 't-threads');
+  assert.deepEqual(parsed.topics[0].entities, ['mutex', 'semaphore', 'spinlocks']);
+  assert.equal(parsed.topics[1].name, 'Virtual Memory & Paging');
+});
+
+test('mapTopicsAgainstLocalIndex flags topics with no notes as zero coverage and links covered topics to best matches', async () => {
+  const coveredNote: StoredNoteEntry = {
+    fileName: 'memory.json',
+    pillar: 'manual',
+    path: 'manual/memory.json',
+    excerpt: 'Virtual memory uses page tables and TLB caches.',
+    wordCount: 30,
+    note: {
+      id: 'note-vm-1',
+      schemaVersion: 1,
+      title: 'Virtual Memory Study Guide',
+      category: 'Study',
+      pillar: 'manual',
+      createdAt: '2026-11-22T00:00:00.000Z',
+      updatedAt: '2026-11-22T00:00:00.000Z',
+      contentHash: 'hash-vm',
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            attrs: {id: 'blk-vm-p1'},
+            content: [
+              {
+                type: 'text',
+                text: 'Virtual memory isolates processes with hardware page tables and TLB translation caches.',
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+
+  const topics = [
+    {
+      id: 't-covered',
+      name: 'Virtual Memory & Paging',
+      description: 'Page tables, TLB hits, and memory translation.',
+      entities: ['TLB', 'page table'],
+    },
+    {
+      id: 't-zero',
+      name: 'Quantum Circuit Compilation',
+      description: 'Clifford+T decomposition and surface codes.',
+      entities: ['Clifford gates', 'T-count', 'syndrome extraction'],
+    },
+  ];
+
+  const results = await mapTopicsAgainstLocalIndex({
+    topics,
+    notes: [coveredNote],
+    sources: [],
+    aiEnabled: false,
+    threshold: 0.25,
+  });
+
+  assert.equal(results.length, 2);
+
+  // 1. Covered topic matches note and provides links
+  const coveredResult = results.find((r) => r.topic.id === 't-covered')!;
+  assert.equal(coveredResult.coverage, 'covered');
+  assert.equal(coveredResult.knowledgeGap, false);
+  assert.ok(coveredResult.bestScore >= 0.25);
+  assert.equal(coveredResult.bestMatches.length, 1);
+  assert.equal(coveredResult.bestMatches[0].noteId, 'note-vm-1');
+  assert.equal(coveredResult.bestMatches[0].blockId, 'blk-vm-p1');
+
+  // 2. Diagnostics requirement: a topic with no notes is cleanly flagged with zero coverage
+  const zeroResult = results.find((r) => r.topic.id === 't-zero')!;
+  assert.equal(zeroResult.coverage, 'zero');
+  assert.equal(zeroResult.knowledgeGap, true);
+  assert.equal(zeroResult.bestScore, 0);
+  assert.equal(zeroResult.bestMatches.length, 0);
+
+  // 3. Build gap analysis report
+  const rep = buildGapAnalysisReport({
+    courseTitle: 'OS & Quantum Test',
+    syllabusSnippet: 'Virtual Memory and Quantum Circuits',
+    threshold: 0.25,
+    topics: results,
+  });
+
+  assert.equal(rep.totalTopics, 2);
+  assert.equal(rep.coveredCount, 1);
+  assert.equal(rep.zeroCoverageCount, 1);
+  assert.equal(rep.weakCoverageCount, 0);
+});
+
+test('Syllabus gap analysis privacy gate enforces user notice approval before sending syllabus text', async () => {
+  const preview = prepareSyllabusPreview({
+    provider: 'gemini',
+    syllabusText: 'Week 1: Graph Theory. Week 2: Dynamic Programming.',
+  });
+
+  // Unapproved call must throw
+  await assert.rejects(
+    () =>
+      executeApprovedSyllabusExtraction({
+        preview,
+        userApprovedNotice: false,
+        apiKeyOverride: 'test-key',
+      }),
+    /Privacy notice approval is required/,
+  );
+
+  // Replay blocked
+  let capturedBody = '';
+  const mockAdapter = {
+    ...getProviderAdapter('gemini'),
+    async synthesizeFromExcerpts(p: {
+      apiKey: string;
+      model?: string;
+      question: string;
+      excerpts: CloudRetrievedExcerpt[];
+    }) {
+      capturedBody = p.excerpts[0]?.text || '';
+      return {
+        provider: 'gemini' as const,
+        model: 'gemini-2.5-flash',
+        question: p.question,
+        answerText: JSON.stringify({
+          courseTitle: 'Algorithms',
+          topics: [
+            {
+              id: 't-dp',
+              name: 'Dynamic Programming',
+              description: 'Memoization and tabulation.',
+              entities: ['memoization', 'DAG'],
+            },
+          ],
+        }),
+        citedNumbers: [1],
+        citations: [],
+        createdAt: new Date().toISOString(),
+      };
+    },
+  };
+
+  const res = await executeApprovedSyllabusExtraction({
+    preview,
+    userApprovedNotice: true,
+    apiKeyOverride: 'test-key',
+    adapterOverride: mockAdapter,
+  });
+
+  assert.equal(res.topics.length, 1);
+  assert.ok(capturedBody.includes('Graph Theory'));
+
+  // Replay fails
+  await assert.rejects(
+    () =>
+      executeApprovedSyllabusExtraction({
+        preview,
+        userApprovedNotice: true,
+        apiKeyOverride: 'test-key',
+        adapterOverride: mockAdapter,
+      }),
+    /already sent or cancelled/,
+  );
+});
+
 
 
 

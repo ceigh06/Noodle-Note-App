@@ -43,6 +43,12 @@ import {
   parseCitedBlockIds,
   prepareChatPreview,
 } from './chatService';
+import {
+  cancelSyllabusPreview,
+  executeApprovedSyllabusExtraction,
+  mapTopicsAgainstLocalIndex,
+  prepareSyllabusPreview,
+} from './gapAnalysisService';
 import {filterWebCitationsByWhitelist} from './trustSettings';
 
 export async function runCloudDiagnostics(): Promise<DiagnosticCheckResult[]> {
@@ -504,6 +510,175 @@ export async function runCloudDiagnostics(): Promise<DiagnosticCheckResult[]> {
       results.push({
         id: 'chat-privacy-notice-gate',
         name: 'AI Chat: Privacy Notice Gate (No Content Sent Without Notice)',
+        status: 'FAIL',
+        details: (err as Error).message,
+        durationMs: Math.round(performance.now() - start),
+      });
+    }
+  }
+
+  // 3c. Gap Analysis: Mandatory Privacy Notice on syllabus upload & zero-coverage topic flagged
+  {
+    const start = performance.now();
+    try {
+      const sampleSyllabus =
+        'Advanced Quantum Computing: Entanglement, Bell Inequalities, and Decoherence';
+      const preview = prepareSyllabusPreview({
+        provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        syllabusText: sampleSyllabus,
+      });
+
+      // 1. Unapproved call MUST fail (no syllabus text sent without notice)
+      let unapprovedBlocked = false;
+      try {
+        await executeApprovedSyllabusExtraction({
+          preview,
+          userApprovedNotice: false,
+          apiKeyOverride: fakeGoogleKey,
+        });
+      } catch {
+        unapprovedBlocked = true;
+      }
+
+      // 2. Approved call succeeds and extracts topics
+      const mockExtractionAdapter = {
+        ...getProviderAdapter('gemini'),
+        async synthesizeFromExcerpts() {
+          return {
+            provider: 'gemini' as const,
+            model: 'gemini-2.5-flash',
+            question: 'Extract topics',
+            answerText: JSON.stringify({
+              courseTitle: 'Quantum Computing',
+              topics: [
+                {
+                  id: 't-uncovered',
+                  name: 'Bell Non-Locality & CHSH Inequality',
+                  description: 'Experimental tests of hidden variable theories',
+                  entities: ['Bell inequality', 'CHSH game', 'loophole-free tests'],
+                },
+              ],
+            }),
+            citedNumbers: [1],
+            citations: [],
+            createdAt: new Date().toISOString(),
+          };
+        },
+      };
+
+      const extracted = await executeApprovedSyllabusExtraction({
+        preview,
+        userApprovedNotice: true,
+        apiKeyOverride: fakeGoogleKey,
+        adapterOverride: mockExtractionAdapter,
+      });
+
+      // 3. Replay attack blocked
+      let replayBlocked = false;
+      try {
+        await executeApprovedSyllabusExtraction({
+          preview,
+          userApprovedNotice: true,
+          apiKeyOverride: fakeGoogleKey,
+          adapterOverride: mockExtractionAdapter,
+        });
+      } catch {
+        replayBlocked = true;
+      }
+
+      // 4. Cancelled preview blocked
+      const preview2 = prepareSyllabusPreview({
+        provider: 'gemini',
+        syllabusText: 'Some other syllabus',
+      });
+      cancelSyllabusPreview(preview2.requestId);
+      let cancelBlocked = false;
+      try {
+        await executeApprovedSyllabusExtraction({
+          preview: preview2,
+          userApprovedNotice: true,
+          apiKeyOverride: fakeGoogleKey,
+          adapterOverride: mockExtractionAdapter,
+        });
+      } catch {
+        cancelBlocked = true;
+      }
+
+      // 5. Diagnostics: a topic with no notes is cleanly flagged with zero coverage
+      const disjointNotes: StoredNoteEntry[] = [
+        {
+          fileName: 'art.json',
+          pillar: 'manual',
+          path: 'manual/art.json',
+          excerpt: 'Impressionist painting techniques in 19th century Paris.',
+          wordCount: 25,
+          note: {
+            id: 'note-art-1',
+            schemaVersion: 1,
+            title: 'Impressionist Painting',
+            category: 'Study',
+            pillar: 'manual',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            contentHash: 'hash-art',
+            content: {
+              type: 'doc',
+              content: [
+                {
+                  type: 'paragraph',
+                  attrs: {id: 'blk-art-1'},
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'Monet painted water lilies with visible brush strokes.',
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      ];
+
+      const mappedCoverage = await mapTopicsAgainstLocalIndex({
+        topics: extracted.topics,
+        notes: disjointNotes,
+        sources: [],
+        aiEnabled: false,
+        threshold: 0.25,
+      });
+
+      const uncoveredTopic = mappedCoverage.find(
+        (t) => t.topic.id === 't-uncovered',
+      );
+      const isFlaggedAsZero =
+        Boolean(uncoveredTopic) &&
+        uncoveredTopic?.coverage === 'zero' &&
+        uncoveredTopic?.knowledgeGap === true &&
+        uncoveredTopic?.bestScore === 0 &&
+        uncoveredTopic?.bestMatches.length === 0;
+
+      const passed =
+        unapprovedBlocked &&
+        replayBlocked &&
+        cancelBlocked &&
+        extracted.topics.length === 1 &&
+        isFlaggedAsZero;
+
+      results.push({
+        id: 'gap-analysis-zero-coverage-flag',
+        name: 'Gap Analysis: Topic with No Notes is Flagged (Privacy Notice Enforced)',
+        status: passed ? 'PASS' : 'FAIL',
+        details: passed
+          ? 'Enforced mandatory privacy notice approval before syllabus transmission, blocked replay/cancelled dispatches, and verified a topic with no notes is flagged with zero coverage (bestScore: 0).'
+          : 'Failed to flag zero-coverage topic or enforce privacy notice for syllabus extraction.',
+        durationMs: Math.round(performance.now() - start),
+      });
+    } catch (err) {
+      results.push({
+        id: 'gap-analysis-zero-coverage-flag',
+        name: 'Gap Analysis: Topic with No Notes is Flagged (Privacy Notice Enforced)',
         status: 'FAIL',
         details: (err as Error).message,
         durationMs: Math.round(performance.now() - start),

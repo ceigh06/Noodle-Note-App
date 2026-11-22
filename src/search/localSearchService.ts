@@ -655,7 +655,18 @@ export async function searchWorkspaceBlocks(params: {
     return {mode: 'word-match', results: []};
   }
 
-  const config = await getStoredEmbeddingConfig();
+  let config: EmbeddingModelConfig = {
+    modelId: DEFAULT_EMBEDDING_MODEL_ID,
+    vectorSize: 384,
+    isDownloaded: false,
+  };
+  try {
+    if (typeof indexedDB !== 'undefined') {
+      config = await getStoredEmbeddingConfig();
+    }
+  } catch {
+    // In test or non-browser environments without IndexedDB, fall back cleanly
+  }
 
   if (params.aiEnabled && config.isDownloaded) {
     const chunks = await getEmbeddingChunks(config.modelId);

@@ -9,6 +9,7 @@ import {
   Layers,
   PenLine,
   Sliders,
+  Target,
   X,
 } from 'lucide-react';
 import {PillarFilter, RoutePath} from '../types/noodle';
@@ -83,6 +84,7 @@ export function Sidebar({
   }> = [
     {path: '/workspace/study', label: 'Study', icon: GraduationCap},
     {path: '/workspace/synthesizer', label: 'Synthesizer', icon: GitMerge},
+    {path: '/workspace/gap-analysis', label: 'Gap Analysis', icon: Target},
     {path: '/workspace/organize', label: 'Organize Notes', icon: FolderTree},
     {path: '/workspace/trust-tuning', label: 'Trust & Tuning', icon: Sliders},
     {path: '/diagnostics', label: 'Diagnostics', icon: ClipboardCheck},
