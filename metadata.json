@@ -1,0 +1,6 @@
+{
+  "name": "Noodle",
+  "description": "A local-first, privacy-first study-notes workspace with pillar organization, local search, and BYOK synthesis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

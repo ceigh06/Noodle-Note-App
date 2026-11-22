@@ -1,0 +1,246 @@
+@import "tailwindcss";
+
+@theme {
+  --font-serif: "Fraunces", Georgia, Cambria, "Times New Roman", serif;
+  --font-sans: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    background-color: #0c0d10;
+    color: #ecebe6;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Optical compensation for dark surfaces */
+  body {
+    letter-spacing: 0.005em;
+  }
+
+  ::selection {
+    background-color: rgba(224, 168, 62, 0.25);
+    color: #f7f4eb;
+  }
+}
+
+/* Subtle desktop-app scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #252934;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #343a49;
+}
+
+/* Pageless TipTap Editor Typography & Blocks */
+.noodle-prosemirror .ProseMirror {
+  outline: none;
+  min-height: 55vh;
+  color: #e4e2db;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.72;
+}
+
+.noodle-prosemirror .ProseMirror > * + * {
+  margin-top: 0.8em;
+}
+
+.noodle-prosemirror .ProseMirror h1,
+.noodle-prosemirror .ProseMirror h2,
+.noodle-prosemirror .ProseMirror h3 {
+  font-family: var(--font-serif);
+  color: #f5f1e8;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.28;
+}
+
+.noodle-prosemirror .ProseMirror h1 {
+  font-size: 1.85rem;
+  margin-top: 1.4em;
+}
+
+.noodle-prosemirror .ProseMirror h2 {
+  font-size: 1.4rem;
+  margin-top: 1.25em;
+}
+
+.noodle-prosemirror .ProseMirror h3 {
+  font-size: 1.15rem;
+  margin-top: 1.1em;
+}
+
+.noodle-prosemirror .ProseMirror > h1:first-child,
+.noodle-prosemirror .ProseMirror > h2:first-child,
+.noodle-prosemirror .ProseMirror > h3:first-child {
+  margin-top: 0;
+}
+
+.noodle-prosemirror .ProseMirror a {
+  color: #e0a83e;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.noodle-prosemirror .ProseMirror a:hover {
+  color: #f3c86f;
+}
+
+.noodle-prosemirror .ProseMirror code {
+  background-color: #181c25;
+  border: 1px solid #262b38;
+  border-radius: 4px;
+  padding: 0.12em 0.35em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.875em;
+  color: #f1d494;
+}
+
+.noodle-prosemirror .ProseMirror pre {
+  background-color: #0e1015;
+  border: 1px solid #242936;
+  border-radius: 10px;
+  padding: 0.9rem 1.1rem;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #dcdfe6;
+}
+
+.noodle-prosemirror .ProseMirror pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+.noodle-prosemirror .ProseMirror blockquote {
+  background-color: #13161e;
+  border: 1px solid #252a38;
+  border-radius: 10px;
+  padding: 0.85rem 1.15rem;
+  color: #cbc7bc;
+  font-style: italic;
+}
+
+.noodle-prosemirror .ProseMirror hr {
+  border: none;
+  border-top: 1px solid #272c3a;
+  margin: 1.5rem 0;
+}
+
+.noodle-prosemirror .ProseMirror ul:not([data-type="taskList"]) {
+  list-style-type: disc;
+  padding-left: 1.4rem;
+}
+
+.noodle-prosemirror .ProseMirror ol {
+  list-style-type: decimal;
+  padding-left: 1.4rem;
+}
+
+.noodle-prosemirror .ProseMirror li > p {
+  margin: 0.15em 0;
+}
+
+.noodle-prosemirror .ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.2rem;
+}
+
+.noodle-prosemirror .ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0.3rem 0;
+}
+
+.noodle-prosemirror .ProseMirror ul[data-type="taskList"] li > label {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 0.28rem;
+  user-select: none;
+}
+
+.noodle-prosemirror .ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"] {
+  accent-color: #e0a83e;
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.noodle-prosemirror .ProseMirror ul[data-type="taskList"] li > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.noodle-prosemirror .ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div {
+  color: #888f9f;
+  text-decoration: line-through;
+}
+
+.noodle-prosemirror .ProseMirror table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+  table-layout: fixed;
+  overflow: hidden;
+}
+
+.noodle-prosemirror .ProseMirror th,
+.noodle-prosemirror .ProseMirror td {
+  border: 1px solid #292e3d;
+  padding: 0.5rem 0.7rem;
+  vertical-align: top;
+  text-align: left;
+  position: relative;
+}
+
+.noodle-prosemirror .ProseMirror th {
+  background-color: #171b24;
+  color: #f3efe6;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.noodle-prosemirror .ProseMirror td {
+  background-color: #101218;
+  font-size: 14px;
+}
+
+.noodle-prosemirror .ProseMirror .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(224, 168, 62, 0.14);
+  pointer-events: none;
+}
+
+.noodle-target-block {
+  border-radius: 8px;
+  background-color: rgba(224, 168, 62, 0.14) !important;
+  outline: 1px solid rgba(224, 168, 62, 0.55);
+  transition: background-color 250ms ease, outline-color 250ms ease;
+}
+
+
+
