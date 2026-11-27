@@ -1,4 +1,6 @@
 import {WhisperProgressState} from '../types/noodle';
+import {prepareAudioForWhisper} from './microphoneController';
+import {cleanWhisperTranscript} from './transcriptCleaner';
 import {DEFAULT_WHISPER_MODEL_ID} from './voiceConfig';
 import type {WhisperWorkerRequest} from './whisperWorker';
 
@@ -218,10 +220,18 @@ export async function transcribeEphemeralAudio(params: {
   modelId: string;
 }): Promise<string> {
   const {samples16k, modelId} = params;
-  if (!samples16k || samples16k.length < 800) {
+  if (!samples16k || samples16k.length < 1600) {
     if (samples16k) {
       samples16k.fill(0);
     }
+    return '';
+  }
+
+  const prepared = prepareAudioForWhisper(samples16k);
+  samples16k.fill(0);
+
+  if (!prepared.hasSpeech || prepared.audio.length < 1600) {
+    prepared.audio.fill(0);
     return '';
   }
 
@@ -235,9 +245,8 @@ export async function transcribeEphemeralAudio(params: {
         : `Loading ${modelId} into Whisper Web Worker...`,
   });
 
-  // Copy/transfer buffer so caller's reference detaches and worker owns ephemeral memory cleanly.
-  const copy = new Float32Array(samples16k);
-  samples16k.fill(0);
+  // Transfer conditioned buffer directly so worker owns ephemeral memory cleanly.
+  const copy = prepared.audio;
 
   try {
     const res = await runWhisperRequest(
@@ -256,7 +265,7 @@ export async function transcribeEphemeralAudio(params: {
       progress: 100,
       message: 'Transcribed locally. Audio buffer discarded from RAM.',
     });
-    return (res.text ?? '').trim();
+    return cleanWhisperTranscript(res.text ?? '');
   } catch (err) {
     const msg = (err as Error).message || 'Whisper transcription failed.';
     emitProgress({

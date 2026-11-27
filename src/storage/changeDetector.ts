@@ -127,7 +127,8 @@ export function reconcileWorkspaceSnapshot(params: {
     const contentOrMetaChanged =
       prev.contentHash !== entry.note.contentHash ||
       prev.title !== entry.note.title ||
-      prev.category !== entry.note.category;
+      prev.category !== entry.note.category ||
+      (prev.subfolder ?? '') !== (entry.note.subfolder ?? '');
     const statChanged =
       (entry.size ?? 0) !== prev.size ||
       (entry.lastModified ?? 0) !== prev.lastModified;

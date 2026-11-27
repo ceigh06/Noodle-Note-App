@@ -42,7 +42,6 @@ import {chunkPdfPages, chunkPlainTextSource} from '../search/chunker';
 import {extractPdfPagesInWorker} from '../search/pdfExtractor';
 import {
   AiNoteMetadata,
-  CATEGORIES,
   Category,
   DiagnosticCheckResult,
   NoteRecord,
@@ -54,6 +53,7 @@ import {
   WorkspaceScanSummary,
   WritablePillar,
 } from '../types/noodle';
+import {sanitizeCategoryLabel} from './categoryConfig';
 import {
   OwnWriteExpectation,
   reconcileWorkspaceSnapshot,
@@ -64,7 +64,19 @@ import {
  * This module is the ONLY code in Noodle allowed to touch the File System Access API.
  */
 
-const REQUIRED_SUBDIRS = ['sources', 'manual', 'ai', 'assets', '.noodle'] as const;
+const NOODLE_WORK_DIRS = ['sources', 'manual', 'ai', 'assets', '.noodle'] as const;
+const PROJECT_DEPENDENCY_MARKERS = new Set([
+  'node_modules',
+  '.git',
+  'package.json',
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  '.venv',
+  'venv',
+  'cargo.toml',
+  'go.mod',
+]);
 const PILLAR_DIRS: Pillar[] = ['sources', 'manual', 'ai'];
 const MAX_NAME_LENGTH = 120;
 const RESERVED_WINDOWS_NAMES = new Set([
@@ -95,6 +107,7 @@ const RESERVED_WINDOWS_NAMES = new Set([
 export type StorageErrorCode =
   | 'UNSUPPORTED'
   | 'BLOCKED_IFRAME'
+  | 'USER_GESTURE_REQUIRED'
   | 'USER_CANCELLED'
   | 'PERMISSION_DENIED'
   | 'NO_WORKSPACE'
@@ -110,11 +123,17 @@ export type StorageErrorCode =
 
 export class StorageError extends Error {
   code: StorageErrorCode;
+  pendingHandle?: FileSystemDirectoryHandle;
 
-  constructor(code: StorageErrorCode, message: string) {
+  constructor(
+    code: StorageErrorCode,
+    message: string,
+    pendingHandle?: FileSystemDirectoryHandle,
+  ) {
     super(message);
     this.name = 'StorageError';
     this.code = code;
+    this.pendingHandle = pendingHandle;
   }
 }
 
@@ -148,12 +167,19 @@ export interface FolderInspection {
   entryCount: number;
   hasAllNoodleDirs: boolean;
   hasNoodleManifest: boolean;
+  hasKnownNoodleWorkspace: boolean;
+  looksLikeCodeProject: boolean;
+  projectMarkerNames: string[];
+  directManualNotesCount: number;
+  looksLikeDirectManualSubfolder: boolean;
+  rootMarkdownOrTextCount: number;
 }
 
 export interface CreateNoteInput {
   pillar: WritablePillar;
   title: string;
   category: Category;
+  subfolder?: string;
   bodyText?: string;
   content?: TipTapDoc;
   aiMeta?: AiNoteMetadata;
@@ -162,11 +188,14 @@ export interface CreateNoteInput {
 export interface UpdateNoteInput {
   title?: string;
   category?: Category;
+  subfolder?: string | null;
   content?: TipTapDoc;
 }
 
 // Active workspace handle kept strictly inside the storage module
 let activeRootHandle: FileSystemDirectoryHandle | null = null;
+// True when the user opened a `manual/` folder directly (notes live in root, not root/manual/)
+let activeDirectManualRoot = false;
 // Track writes made by the app to prevent re-indexing echo loops (Hard Rule 3)
 const trackedOwnWrites = new Map<string, OwnWriteExpectation>();
 // Cache parsed notes keyed by workspace path so unchanged size/lastModified files skip re-hashing
@@ -184,6 +213,9 @@ let inFlightScanPromise: Promise<WorkspaceScanSummary> | null = null;
 let lastScanCompletedAt = 0;
 let lastScanSummary: WorkspaceScanSummary | null = null;
 let lastScanProblems: ScanProblem[] = [];
+let isChangeDiagRunning = false;
+const DIAG_SYNC_SUBDIR = '_diag_sync_1000';
+const DIAG_SYNC_ID_PREFIX = '00000000-0000-4000-9000-';
 
 function enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
   const next = writeQueue.then(task, task);
@@ -393,7 +425,37 @@ async function resolvePillarDir(
   create = false,
 ): Promise<FileSystemDirectoryHandle> {
   assertValidPillar(pillar);
+  if (pillar === 'manual' && activeDirectManualRoot) {
+    return root;
+  }
   return root.getDirectoryHandle(pillar, {create});
+}
+
+async function dirExistsInRoot(
+  root: FileSystemDirectoryHandle,
+  name: string,
+): Promise<boolean> {
+  try {
+    await root.getDirectoryHandle(name, {create: false});
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function removeDirIfEmpty(
+  root: FileSystemDirectoryHandle,
+  name: string,
+): Promise<void> {
+  try {
+    const dir = await root.getDirectoryHandle(name, {create: false});
+    for await (const _entry of dir.entries()) {
+      return;
+    }
+    await root.removeEntry(name);
+  } catch {
+    // Directory missing or non-empty
+  }
 }
 
 async function resolveNoteHandle(
@@ -586,7 +648,7 @@ async function writeBinaryFileAtomic(
 }
 
 function isValidCategory(value: unknown): value is Category {
-  return typeof value === 'string' && CATEGORIES.includes(value as Category);
+  return typeof value === 'string' && sanitizeCategoryLabel(value).length > 0;
 }
 
 function parseNoteJson(rawText: string, expectedPillar: Pillar): NoteRecord {
@@ -611,6 +673,42 @@ function parseNoteJson(rawText: string, expectedPillar: Pillar): NoteRecord {
   }
 }
 
+async function cleanupOrphanedDiagSyncData(
+  root: FileSystemDirectoryHandle,
+): Promise<void> {
+  if (isChangeDiagRunning) {
+    return;
+  }
+  for (const pillar of ['manual', 'ai'] as const) {
+    try {
+      const pDir = await resolvePillarDir(root, pillar, false);
+      try {
+        await pDir.removeEntry(DIAG_SYNC_SUBDIR, {recursive: true});
+      } catch {
+        // No leftover diag folder in this pillar
+      }
+      if (!(pillar === 'manual' && activeDirectManualRoot)) {
+        await removeDirIfEmpty(root, pillar);
+      }
+    } catch {
+      // Pillar directory doesn't exist
+    }
+  }
+  try {
+    const idx = await readNotesIndex();
+    const staleIds = idx
+      .filter((row) => row.id.startsWith(DIAG_SYNC_ID_PREFIX))
+      .map((row) => row.id);
+    if (staleIds.length > 0) {
+      await applyBatchIndexChanges({upserts: [], deleteNoteIds: staleIds});
+    }
+  } catch {
+    // Ignore index cleanup errors
+  }
+}
+
+const DIRECT_MANUAL_SKIP_DIRS = new Set(['ai', 'assets', 'sources', '.noodle']);
+
 async function scanNotesInDirectory(
   dirHandle: FileSystemDirectoryHandle,
   pillar: Pillar,
@@ -623,6 +721,18 @@ async function scanNotesInDirectory(
 
   for await (const [name, handle] of dirHandle.entries()) {
     if (name.startsWith('.')) {
+      continue;
+    }
+    if (!isChangeDiagRunning && handle.kind === 'directory' && name === DIAG_SYNC_SUBDIR) {
+      continue;
+    }
+    if (
+      activeDirectManualRoot &&
+      pillar === 'manual' &&
+      prefix === '' &&
+      handle.kind === 'directory' &&
+      DIRECT_MANUAL_SKIP_DIRS.has(name.toLowerCase())
+    ) {
       continue;
     }
 
@@ -731,23 +841,198 @@ export async function requestHandlePermission(
   return 'granted';
 }
 
+export function summarizeWorkspaceFolderEntries(
+  folderName: string,
+  entryNames: string[],
+  hasNoodleManifest: boolean,
+  extra?: {
+    directManualNotesCount?: number;
+    rootMarkdownOrTextCount?: number;
+  },
+): FolderInspection {
+  const existingNames = new Set(entryNames);
+  const projectMarkerNames = entryNames
+    .filter((name) => PROJECT_DEPENDENCY_MARKERS.has(name.toLowerCase()))
+    .sort((a, b) => a.localeCompare(b));
+  const looksLikeCodeProject = projectMarkerNames.length > 0;
+  const hasAllNoodleDirs = NOODLE_WORK_DIRS.every((dir) =>
+    existingNames.has(dir),
+  );
+  const hasPillarDir =
+    existingNames.has('manual') ||
+    existingNames.has('ai') ||
+    existingNames.has('sources');
+  const hasKnownNoodleWorkspace =
+    hasNoodleManifest || (hasPillarDir && !looksLikeCodeProject);
+  const directManualNotesCount = extra?.directManualNotesCount ?? 0;
+  const rootMarkdownOrTextCount = extra?.rootMarkdownOrTextCount ?? 0;
+  const looksLikeDirectManualSubfolder =
+    !hasNoodleManifest &&
+    !hasPillarDir &&
+    !looksLikeCodeProject &&
+    ((folderName.toLowerCase() === 'manual' && entryNames.length > 0) ||
+      directManualNotesCount > 0);
+
+  return {
+    folderName,
+    isEmpty: entryNames.length === 0,
+    entryCount: entryNames.length,
+    hasAllNoodleDirs,
+    hasNoodleManifest,
+    hasKnownNoodleWorkspace,
+    looksLikeCodeProject,
+    projectMarkerNames,
+    directManualNotesCount,
+    looksLikeDirectManualSubfolder,
+    rootMarkdownOrTextCount,
+  };
+}
+
+async function isNoodleNoteJsonFile(
+  fileHandle: FileSystemFileHandle,
+): Promise<boolean> {
+  try {
+    const file = await fileHandle.getFile();
+    if (file.size === 0 || file.size > 5 * 1024 * 1024) {
+      return false;
+    }
+    const text = await file.text();
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') {
+      return false;
+    }
+    const content = parsed.content as {type?: unknown} | undefined;
+    return (
+      typeof parsed.id === 'string' &&
+      typeof parsed.title === 'string' &&
+      Boolean(content && typeof content === 'object' && content.type === 'doc')
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function countDirectManualCandidates(
+  handle: FileSystemDirectoryHandle,
+): Promise<{directManualNotesCount: number; rootMarkdownOrTextCount: number}> {
+  let directManualNotesCount = 0;
+  let rootMarkdownOrTextCount = 0;
+  let checkedJson = 0;
+  const subdirHandles: FileSystemDirectoryHandle[] = [];
+
+  for await (const [name, entryHandle] of handle.entries()) {
+    if (name.startsWith('.')) {
+      continue;
+    }
+    if (entryHandle.kind === 'directory') {
+      if (!DIRECT_MANUAL_SKIP_DIRS.has(name.toLowerCase())) {
+        subdirHandles.push(entryHandle as FileSystemDirectoryHandle);
+      }
+      continue;
+    }
+    if (entryHandle.kind !== 'file') {
+      continue;
+    }
+    const lower = name.toLowerCase();
+    if (lower.endsWith('.json') && checkedJson < 25) {
+      checkedJson += 1;
+      if (await isNoodleNoteJsonFile(entryHandle as FileSystemFileHandle)) {
+        directManualNotesCount += 1;
+      }
+    } else if (
+      lower.endsWith('.md') ||
+      lower.endsWith('.markdown') ||
+      lower.endsWith('.txt')
+    ) {
+      rootMarkdownOrTextCount += 1;
+    }
+  }
+
+  // Also check 1-level subfolders if root didn't directly list .json files
+  if (directManualNotesCount === 0 && subdirHandles.length > 0) {
+    for (const sub of subdirHandles.slice(0, 12)) {
+      try {
+        for await (const [subName, subEntry] of sub.entries()) {
+          if (subName.startsWith('.') || subEntry.kind !== 'file') {
+            continue;
+          }
+          const lower = subName.toLowerCase();
+          if (lower.endsWith('.json') && checkedJson < 30) {
+            checkedJson += 1;
+            if (await isNoodleNoteJsonFile(subEntry as FileSystemFileHandle)) {
+              directManualNotesCount += 1;
+            }
+          } else if (
+            lower.endsWith('.md') ||
+            lower.endsWith('.markdown') ||
+            lower.endsWith('.txt')
+          ) {
+            rootMarkdownOrTextCount += 1;
+          }
+        }
+      } catch {
+        // Ignore unreadable subdir during inspection
+      }
+    }
+  }
+
+  return {directManualNotesCount, rootMarkdownOrTextCount};
+}
+
+async function detectDirectManualRoot(
+  root: FileSystemDirectoryHandle,
+  preferredFlag?: boolean,
+): Promise<boolean> {
+  try {
+    const [hasManualDir, hasAiDir, hasSourcesDir] = await Promise.all([
+      dirExistsInRoot(root, 'manual'),
+      dirExistsInRoot(root, 'ai'),
+      dirExistsInRoot(root, 'sources'),
+    ]);
+    if (hasManualDir || hasAiDir || hasSourcesDir) {
+      return false;
+    }
+    if (preferredFlag === true) {
+      return true;
+    }
+    const {directManualNotesCount} = await countDirectManualCandidates(root);
+    return directManualNotesCount > 0;
+  } catch {
+    return Boolean(preferredFlag);
+  }
+}
+
 export async function inspectWorkspaceFolder(
   handle: FileSystemDirectoryHandle,
 ): Promise<FolderInspection> {
-  const existingNames = new Set<string>();
-  let entryCount = 0;
+  const entryNames: string[] = [];
 
-  for await (const [name] of handle.entries()) {
-    existingNames.add(name);
-    entryCount += 1;
+  try {
+    for await (const [name] of handle.entries()) {
+      entryNames.push(name);
+    }
+  } catch (err) {
+    const domErr = err as {name?: string; message?: string};
+    if (domErr?.name === 'NotAllowedError' || domErr?.name === 'SecurityError') {
+      throw new StorageError(
+        'PERMISSION_DENIED',
+        `Permission to read "${handle.name}" was not granted. Please allow folder access and try again.`,
+      );
+    }
+    if (domErr?.name === 'NotFoundError') {
+      throw new StorageError(
+        'NOT_FOUND',
+        `Folder "${handle.name}" could not be found on disk.`,
+      );
+    }
+    throw new StorageError(
+      'IO_ERROR',
+      domErr?.message || `Unable to read folder "${handle.name}".`,
+    );
   }
 
-  const hasAllNoodleDirs = REQUIRED_SUBDIRS.every((dir) =>
-    existingNames.has(dir),
-  );
-
   let hasNoodleManifest = false;
-  if (existingNames.has('.noodle')) {
+  if (entryNames.includes('.noodle')) {
     try {
       const noodleDir = await handle.getDirectoryHandle('.noodle');
       await noodleDir.getFileHandle('manifest.json');
@@ -757,107 +1042,188 @@ export async function inspectWorkspaceFolder(
     }
   }
 
-  return {
-    folderName: handle.name,
-    isEmpty: entryCount === 0,
-    entryCount,
-    hasAllNoodleDirs,
+  const base = summarizeWorkspaceFolderEntries(
+    handle.name,
+    entryNames,
     hasNoodleManifest,
-  };
+  );
+  if (
+    !base.isEmpty &&
+    !base.hasKnownNoodleWorkspace &&
+    !base.looksLikeCodeProject
+  ) {
+    const extra = await countDirectManualCandidates(handle);
+    return summarizeWorkspaceFolderEntries(
+      handle.name,
+      entryNames,
+      hasNoodleManifest,
+      extra,
+    );
+  }
+
+  return base;
 }
 
 /**
- * Creates sources/, manual/, ai/, assets/, and .noodle/ if missing.
+ * Connects the workspace folder cleanly without creating empty folders upfront.
+ * Subfolders (`manual/`, `ai/`, `assets/`) are created lazily only when used.
  * Never deletes or overwrites existing user files.
  */
 export async function initializeWorkspaceFolders(
   handle: FileSystemDirectoryHandle,
+  options?: {directManualRoot?: boolean},
 ): Promise<void> {
   await enqueueWrite(async () => {
-    for (const dirName of REQUIRED_SUBDIRS) {
-      await handle.getDirectoryHandle(dirName, {create: true});
-    }
-
-    const noodleDir = await handle.getDirectoryHandle('.noodle', {create: true});
-    let manifestExists = false;
-    try {
-      await noodleDir.getFileHandle('manifest.json', {create: false});
-      manifestExists = true;
-    } catch {
-      manifestExists = false;
-    }
-
-    if (!manifestExists) {
-      const manifest = JSON.stringify(
-        {
-          app: 'Noodle',
-          schemaVersion: 1,
-          createdAt: new Date().toISOString(),
-        },
-        null,
-        2,
-      );
-      const digest = await computeSha256(manifest);
-      await writeFileAtomic(
-        noodleDir,
-        '.noodle/manifest.json',
-        'manifest.json',
-        manifest,
-        digest,
-      );
-    }
-
+    const directMode =
+      options?.directManualRoot ?? (await detectDirectManualRoot(handle));
     activeRootHandle = handle;
-    await saveWorkspaceHandle(handle);
+    activeDirectManualRoot = directMode;
+    try {
+      await saveWorkspaceHandle(handle, directMode);
+    } catch {
+      // Allow live folder session even if browser IndexedDB persistence is restricted
+    }
   });
 }
 
-export async function pickWorkspaceFolder(): Promise<{
+function classifyPickerError(err: unknown): StorageError {
+  const domErr = err as {name?: string; message?: string};
+  const msg = domErr?.message ?? '';
+  if (domErr?.name === 'AbortError') {
+    return new StorageError('USER_CANCELLED', 'Folder selection cancelled.');
+  }
+  if (/user gesture|user activation/i.test(msg)) {
+    return new StorageError(
+      'USER_GESTURE_REQUIRED',
+      'Click the button again to open the folder picker.',
+    );
+  }
+  if (
+    isInsideIframe() ||
+    /cross.?origin|subframe|iframe|embedded/i.test(msg)
+  ) {
+    return new StorageError(
+      'BLOCKED_IFRAME',
+      'The folder picker is blocked inside an embedded frame.',
+    );
+  }
+  if (domErr?.name === 'SecurityError' || domErr?.name === 'NotAllowedError') {
+    return new StorageError(
+      'PERMISSION_DENIED',
+      'Your browser blocked direct folder write access for this site. Use "Open folder read-only instead" below, or open Noodle in Chrome or Edge for full disk saving.',
+    );
+  }
+  return new StorageError(
+    'IO_ERROR',
+    msg || 'Unable to open directory picker.',
+  );
+}
+
+async function openDirectoryPickerSafe(
+  pickerWin: PickerWindow,
+  startInHandle?: FileSystemDirectoryHandle,
+): Promise<FileSystemDirectoryHandle> {
+  const tryOpen = async (
+    startIn?: FileSystemDirectoryHandle,
+  ): Promise<FileSystemDirectoryHandle> => {
+    return pickerWin.showDirectoryPicker!({
+      mode: 'readwrite',
+      ...(startIn ? {startIn: startIn as unknown as 'documents'} : {}),
+    });
+  };
+
+  const startedAt = Date.now();
+  try {
+    return await tryOpen(startInHandle);
+  } catch (err) {
+    const elapsedMs = Date.now() - startedAt;
+    const classified = classifyPickerError(err);
+    if (classified.code === 'USER_CANCELLED') {
+      if (isInsideIframe()) {
+        throw new StorageError(
+          'BLOCKED_IFRAME',
+          'The folder picker is blocked inside an embedded frame. Open Noodle in its own tab.',
+        );
+      }
+      if (elapsedMs < 350) {
+        throw new StorageError(
+          'IO_ERROR',
+          'Your browser closed the folder picker immediately. Try opening Noodle in Chrome or Microsoft Edge, or use "Open folder read-only instead" below.',
+        );
+      }
+      throw classified;
+    }
+    if (
+      startInHandle &&
+      classified.code !== 'BLOCKED_IFRAME' &&
+      classified.code !== 'USER_GESTURE_REQUIRED' &&
+      classified.code !== 'PERMISSION_DENIED'
+    ) {
+      try {
+        return await tryOpen(undefined);
+      } catch (bareErr) {
+        throw classifyPickerError(bareErr);
+      }
+    }
+    throw classified;
+  }
+}
+
+export async function pickWorkspaceFolder(options?: {
+  startInHandle?: FileSystemDirectoryHandle;
+}): Promise<{
   handle: FileSystemDirectoryHandle;
   inspection: FolderInspection;
 }> {
   if (!isFileSystemAccessSupported()) {
     throw new StorageError(
       'UNSUPPORTED',
-      'Your browser does not support the File System Access API. Use a Chromium desktop browser such as Chrome, Edge, Arc, or Brave.',
+      'Your browser has local folder writing disabled (Brave disables it by default under brave://flags/#file-system-access-api). Use Google Chrome or Microsoft Edge, or enable that flag in Brave.',
     );
   }
 
   const pickerWin = window as PickerWindow;
-  let handle: FileSystemDirectoryHandle;
-
-  try {
-    handle = await pickerWin.showDirectoryPicker!({
-      id: 'noodle-workspace',
-      mode: 'readwrite',
-    });
-  } catch (err) {
-    const domErr = err as {name?: string; message?: string};
-    if (domErr?.name === 'AbortError') {
-      throw new StorageError('USER_CANCELLED', 'Folder selection cancelled.');
-    }
-    if (
-      domErr?.name === 'SecurityError' ||
-      (domErr?.message && /cross.?origin|subframe|iframe|security/i.test(domErr.message))
-    ) {
-      throw new StorageError(
-        'BLOCKED_IFRAME',
-        'The folder picker is blocked inside an embedded frame.',
-      );
-    }
-    throw new StorageError(
-      'IO_ERROR',
-      domErr?.message || 'Unable to open directory picker.',
-    );
-  }
+  const handle = await openDirectoryPickerSafe(
+    pickerWin,
+    options?.startInHandle,
+  );
 
   const perm = await queryHandlePermission(handle);
   if (perm !== 'granted') {
-    const requested = await requestHandlePermission(handle);
+    let requested: PermissionState = perm;
+    try {
+      requested = await requestHandlePermission(handle);
+    } catch (permErr) {
+      const domErr = permErr as {name?: string; message?: string};
+      if (
+        domErr?.name === 'SecurityError' ||
+        /user gesture|user activation/i.test(domErr?.message ?? '')
+      ) {
+        throw new StorageError(
+          'USER_GESTURE_REQUIRED',
+          `Folder "${handle.name}" was selected, but your browser needs one more click to grant read/write access. Click "Reconnect workspace" above.`,
+          handle,
+        );
+      }
+      throw new StorageError(
+        'PERMISSION_DENIED',
+        domErr?.message ||
+          `Could not obtain read/write permission for "${handle.name}".`,
+      );
+    }
+
+    if (requested === 'prompt') {
+      throw new StorageError(
+        'USER_GESTURE_REQUIRED',
+        `Folder "${handle.name}" was selected, but your browser still needs permission confirmation. Click "Reconnect workspace" above and allow access.`,
+        handle,
+      );
+    }
+
     if (requested !== 'granted') {
       throw new StorageError(
         'PERMISSION_DENIED',
-        'Read/write permission for the selected folder was not granted.',
+        'Read/write permission for this folder was not granted. Make sure you allow editing files when prompted, or pick a subfolder inside Documents (such as "Noodle Notes").',
       );
     }
   }
@@ -872,6 +1238,7 @@ export async function restoreSavedWorkspace(): Promise<{
   folderName: string;
   permission: PermissionState;
   inspection?: FolderInspection;
+  directManualRoot?: boolean;
 } | null> {
   const row = await loadWorkspaceHandle();
   if (!row || !row.handle) {
@@ -879,25 +1246,43 @@ export async function restoreSavedWorkspace(): Promise<{
   }
 
   restoredHandleFlag = true;
-  const permission = await queryHandlePermission(row.handle);
+  let permission: PermissionState = 'prompt';
+  try {
+    permission = await queryHandlePermission(row.handle);
+  } catch {
+    permission = 'prompt';
+  }
 
   if (permission === 'granted') {
-    const inspection = await inspectWorkspaceFolder(row.handle);
-    if (inspection.hasAllNoodleDirs) {
+    try {
+      const inspection = await inspectWorkspaceFolder(row.handle);
       activeRootHandle = row.handle;
+      activeDirectManualRoot = await detectDirectManualRoot(
+        row.handle,
+        row.directManualRoot,
+      );
+      return {
+        handle: row.handle,
+        folderName: row.folderName || row.handle.name,
+        permission,
+        inspection,
+        directManualRoot: activeDirectManualRoot,
+      };
+    } catch {
+      return {
+        handle: row.handle,
+        folderName: row.folderName || row.handle.name,
+        permission: 'prompt',
+        directManualRoot: row.directManualRoot,
+      };
     }
-    return {
-      handle: row.handle,
-      folderName: row.folderName || row.handle.name,
-      permission,
-      inspection,
-    };
   }
 
   return {
     handle: row.handle,
     folderName: row.folderName || row.handle.name,
     permission,
+    directManualRoot: row.directManualRoot,
   };
 }
 
@@ -905,21 +1290,78 @@ export async function reconnectSavedWorkspace(
   handle: FileSystemDirectoryHandle,
 ): Promise<{
   permission: PermissionState;
+  elapsedMs: number;
   inspection?: FolderInspection;
 }> {
-  const permission = await requestHandlePermission(handle);
+  const startedAt = Date.now();
+  let permission: PermissionState;
+  try {
+    permission = await requestHandlePermission(handle);
+  } catch (err) {
+    const domErr = err as {name?: string; message?: string};
+    const msg = domErr?.message ?? '';
+    if (
+      isInsideIframe() ||
+      /cross.?origin|subframe|iframe|embedded/i.test(msg)
+    ) {
+      throw new StorageError(
+        'BLOCKED_IFRAME',
+        'Folder access cannot be granted inside an embedded window. Open Noodle in a new tab to reconnect your folder.',
+      );
+    }
+    if (domErr?.name === 'NotFoundError') {
+      throw new StorageError(
+        'NOT_FOUND',
+        `Saved folder "${handle.name}" could not be found. Select it again or forget it.`,
+      );
+    }
+    if (
+      domErr?.name === 'SecurityError' ||
+      domErr?.name === 'NotAllowedError'
+    ) {
+      return {
+        permission: 'prompt',
+        elapsedMs: Date.now() - startedAt,
+      };
+    }
+    throw new StorageError(
+      'IO_ERROR',
+      msg || 'Could not request folder permission.',
+    );
+  }
+
+  const elapsedMs = Date.now() - startedAt;
+
   if (permission !== 'granted') {
-    return {permission};
+    if (isInsideIframe()) {
+      throw new StorageError(
+        'BLOCKED_IFRAME',
+        'Folder access cannot be granted inside an embedded window. Open Noodle in a new tab to reconnect your folder.',
+      );
+    }
+    return {permission, elapsedMs};
   }
-  const inspection = await inspectWorkspaceFolder(handle);
-  if (inspection.hasAllNoodleDirs) {
+
+  try {
+    const inspection = await inspectWorkspaceFolder(handle);
     activeRootHandle = handle;
+    activeDirectManualRoot = await detectDirectManualRoot(handle);
+    return {permission, elapsedMs, inspection};
+  } catch (err) {
+    const domErr = err as {name?: string; message?: string};
+    if (domErr?.name === 'NotFoundError') {
+      throw new StorageError(
+        'NOT_FOUND',
+        `Saved folder "${handle.name}" could not be found on disk. Select it again or forget it.`,
+      );
+    }
+    throw err;
   }
-  return {permission, inspection};
 }
 
 export async function forgetSavedWorkspace(): Promise<void> {
   activeRootHandle = null;
+  activeDirectManualRoot = false;
   restoredHandleFlag = false;
   cachedEntriesByPath.clear();
   trackedOwnWrites.clear();
@@ -928,8 +1370,21 @@ export async function forgetSavedWorkspace(): Promise<void> {
   await clearWorkspaceHandle();
 }
 
-export function setActiveWorkspaceHandle(handle: FileSystemDirectoryHandle): void {
+export function setActiveWorkspaceHandle(
+  handle: FileSystemDirectoryHandle,
+  directManualRoot = false,
+): void {
   activeRootHandle = handle;
+  activeDirectManualRoot = directManualRoot;
+}
+
+function isPermissionDomError(err: unknown): boolean {
+  const name = (err as {name?: string})?.name;
+  return (
+    name === 'NotAllowedError' ||
+    name === 'SecurityError' ||
+    (err instanceof StorageError && err.code === 'PERMISSION_DENIED')
+  );
 }
 
 export async function listNotes(pillar?: Pillar): Promise<StoredNoteEntry[]> {
@@ -942,7 +1397,13 @@ export async function listNotes(pillar?: Pillar): Promise<StoredNoteEntry[]> {
       try {
         const dir = await resolvePillarDir(root, p, false);
         return await scanNotesInDirectory(dir, p, undefined, '', problems);
-      } catch {
+      } catch (err) {
+        if (isPermissionDomError(err)) {
+          throw new StorageError(
+            'PERMISSION_DENIED',
+            'Folder read permission was lost or denied. Please reconnect your workspace folder.',
+          );
+        }
         return [];
       }
     }),
@@ -994,6 +1455,14 @@ export async function scanWorkspaceChanges(
   const scanPromise = (async (): Promise<WorkspaceScanSummary> => {
     const start = performance.now();
     const root = requireRootHandle();
+    if (!activeDirectManualRoot && !(await dirExistsInRoot(root, 'manual'))) {
+      if (await detectDirectManualRoot(root)) {
+        activeDirectManualRoot = true;
+      }
+    }
+    if (!isChangeDiagRunning && reason !== 'diagnostics') {
+      await cleanupOrphanedDiagSyncData(root);
+    }
     const previousIndex = await readNotesIndex();
     const prevByPath = new Map<string, NoteIndexRow>();
     for (const row of previousIndex) {
@@ -1006,7 +1475,13 @@ export async function scanWorkspaceChanges(
         try {
           const dir = await resolvePillarDir(root, p, false);
           return await scanNotesInDirectory(dir, p, prevByPath, '', problems);
-        } catch {
+        } catch (err) {
+          if (isPermissionDomError(err)) {
+            throw new StorageError(
+              'PERMISSION_DENIED',
+              'Folder read permission was lost or denied. Please reconnect your workspace folder.',
+            );
+          }
           return [];
         }
       }),
@@ -1137,6 +1612,10 @@ export async function createNote(
   if (!isValidCategory(input.category)) {
     throw new StorageError('INVALID_NAME', 'Invalid note category.');
   }
+  const cleanCategory = sanitizeCategoryLabel(input.category);
+  const cleanSubfolder = input.subfolder
+    ? sanitizeCategoryLabel(input.subfolder)
+    : undefined;
 
   return enqueueWrite(async () => {
     const root = requireRootHandle();
@@ -1168,7 +1647,8 @@ export async function createNote(
       id,
       schemaVersion: CURRENT_SCHEMA_VERSION,
       title: cleanTitle,
-      category: input.category,
+      category: cleanCategory,
+      ...(cleanSubfolder ? {subfolder: cleanSubfolder} : {}),
       pillar: input.pillar,
       createdAt: now,
       updatedAt: now,
@@ -1256,11 +1736,18 @@ export async function updateNote(
 
     const nextTitle =
       patch.title !== undefined ? sanitizeName(patch.title) : existing.note.title;
-    const nextCategory =
+    const rawNextCategory =
       patch.category !== undefined ? patch.category : existing.note.category;
-    if (!isValidCategory(nextCategory)) {
+    if (!isValidCategory(rawNextCategory)) {
       throw new StorageError('INVALID_NAME', 'Invalid note category.');
     }
+    const nextCategory = sanitizeCategoryLabel(rawNextCategory);
+    const nextSubfolder =
+      patch.subfolder === undefined
+        ? existing.note.subfolder
+        : patch.subfolder
+          ? sanitizeCategoryLabel(patch.subfolder) || undefined
+          : undefined;
 
     const nextContent = ensureBlockIds(patch.content ?? existing.note.content);
     try {
@@ -1276,11 +1763,15 @@ export async function updateNote(
       schemaVersion: CURRENT_SCHEMA_VERSION,
       title: nextTitle,
       category: nextCategory,
+      ...(nextSubfolder ? {subfolder: nextSubfolder} : {}),
       pillar,
       updatedAt: new Date().toISOString(),
       contentHash: contentDigest,
       content: nextContent,
     };
+    if (!nextSubfolder) {
+      delete updatedNote.subfolder;
+    }
 
     const fullPath = `${pillar}/${safeFileName}`;
     const serialized = JSON.stringify(updatedNote, null, 2);
@@ -1493,16 +1984,131 @@ export async function moveNote(
   });
 }
 
+export function parseWorkspaceRelativeNoteTarget(targetPath: string): {
+  toPillar: WritablePillar;
+  targetRelPath: string;
+  leafFileName: string;
+  subdirs: string[];
+} {
+  if (typeof targetPath !== 'string' || !targetPath.trim()) {
+    throw new StorageError('INVALID_NAME', 'Target note path cannot be empty.');
+  }
+
+  const normalized = targetPath.replace(/\\/g, '/').trim();
+  if (normalized.startsWith('/')) {
+    throw new StorageError(
+      'PATH_TRAVERSAL',
+      'Target note path must be workspace-relative.',
+    );
+  }
+
+  const segments = normalized.split('/').filter((s) => s.length > 0);
+  if (segments.length < 2) {
+    throw new StorageError(
+      'INVALID_NAME',
+      'Target note path must include a folder and filename (e.g., manual/Study/note.json).',
+    );
+  }
+
+  const rawPillar = segments[0];
+  assertWritablePillar(rawPillar);
+
+  const sanitizedSegments = segments.slice(1).map((seg) => sanitizeName(seg));
+  const leafFileName = sanitizedSegments[sanitizedSegments.length - 1];
+  if (!leafFileName.toLowerCase().endsWith('.json')) {
+    throw new StorageError(
+      'INVALID_NAME',
+      'Note files must use the .json extension.',
+    );
+  }
+
+  return {
+    toPillar: rawPillar,
+    targetRelPath: sanitizedSegments.join('/'),
+    leafFileName,
+    subdirs: sanitizedSegments.slice(0, -1),
+  };
+}
+
 export async function moveNoteToFolder(
   entry: StoredNoteEntry,
   targetPath: string,
 ): Promise<StoredNoteEntry> {
-  const parts = targetPath.split('/');
-  const toPillar: Pillar =
-    parts[0] === 'ai' || parts[0] === 'sources' || parts[0] === 'manual'
-      ? parts[0]
-      : 'manual';
-  return moveNote(entry.pillar, entry.fileName, toPillar);
+  assertWritablePillar(entry.pillar);
+  const {
+    toPillar,
+    targetRelPath,
+    leafFileName: targetLeafName,
+    subdirs,
+  } = parseWorkspaceRelativeNoteTarget(targetPath);
+
+  return enqueueWrite(async () => {
+    const root = requireRootHandle();
+    const {
+      dirHandle: fromDir,
+      safeFileName,
+      leafFileName: sourceLeafName,
+    } = await resolveNoteHandle(root, entry.pillar, entry.fileName);
+
+    const oldFullPath = `${entry.pillar}/${safeFileName}`;
+    const newFullPath = `${toPillar}/${targetRelPath}`;
+    if (oldFullPath === newFullPath) {
+      return readNote(entry.pillar, safeFileName);
+    }
+
+    const existing = await readNote(entry.pillar, safeFileName);
+    let toDir = await resolvePillarDir(root, toPillar, true);
+    for (const sub of subdirs) {
+      toDir = await toDir.getDirectoryHandle(sub, {create: true});
+    }
+
+    const contentDigest = await computeCanonicalContentHash(existing.note.content);
+    const movedNote: NoteRecord = {
+      ...existing.note,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      pillar: toPillar,
+      updatedAt: new Date().toISOString(),
+      contentHash: contentDigest,
+    };
+
+    const serialized = JSON.stringify(movedNote, null, 2);
+    const stat = await writeFileAtomic(
+      toDir,
+      newFullPath,
+      targetLeafName,
+      serialized,
+      contentDigest,
+      movedNote.id,
+    );
+
+    trackedOwnWrites.set(oldFullPath, {
+      path: oldFullPath,
+      noteId: movedNote.id,
+      contentHash: contentDigest,
+      writtenAt: Date.now(),
+      op: 'delete',
+    });
+    cachedEntriesByPath.delete(oldFullPath);
+    await fromDir.removeEntry(sourceLeafName);
+
+    const {excerpt, wordCount} = deriveExcerptAndWordCount(movedNote.content);
+    const updatedEntry: StoredNoteEntry = {
+      note: movedNote,
+      fileName: targetRelPath,
+      pillar: toPillar,
+      excerpt,
+      wordCount,
+      path: newFullPath,
+      size: stat.size,
+      lastModified: stat.lastModified,
+    };
+    cachedEntriesByPath.set(newFullPath, updatedEntry);
+    await upsertSingleNoteIndex(
+      updatedEntry,
+      extractAssetPathsFromDoc(movedNote.content),
+    );
+    return updatedEntry;
+  });
 }
 
 /**
@@ -1663,6 +2269,7 @@ export async function runStorageDiagnostics(): Promise<DiagnosticCheckResult[]> 
     } else {
       const benchDirName = '_diag_bench_200';
       let noodleDir: FileSystemDirectoryHandle | null = null;
+      const noodleExistedBefore = await dirExistsInRoot(activeRootHandle, '.noodle');
       try {
         noodleDir = await activeRootHandle.getDirectoryHandle('.noodle', {
           create: true,
@@ -1731,6 +2338,9 @@ export async function runStorageDiagnostics(): Promise<DiagnosticCheckResult[]> 
           } catch {
             // Ignore cleanup failure
           }
+        }
+        if (!noodleExistedBefore && activeRootHandle) {
+          await removeDirIfEmpty(activeRootHandle, '.noodle');
         }
       }
     }
@@ -2113,6 +2723,9 @@ export async function deleteAssetsFromWorkspace(
 export async function runImageDiagnostics(): Promise<DiagnosticCheckResult[]> {
   const results: DiagnosticCheckResult[] = [];
   const createdAssetsForCleanup: string[] = [];
+  const assetsExistedBefore = activeRootHandle
+    ? await dirExistsInRoot(activeRootHandle, 'assets')
+    : true;
 
   const makeFakeImage = (
     name: string,
@@ -2352,6 +2965,9 @@ export async function runImageDiagnostics(): Promise<DiagnosticCheckResult[]> {
         // Ignore cleanup failure
       }
     }
+    if (!assetsExistedBefore && activeRootHandle) {
+      await removeDirIfEmpty(activeRootHandle, 'assets');
+    }
   }
 
   return results;
@@ -2394,8 +3010,11 @@ export async function runChangeDetectionDiagnostics(): Promise<
   };
 
   if (activeRootHandle) {
+    isChangeDiagRunning = true;
     let manualRoot: FileSystemDirectoryHandle | null = null;
     let aiRoot: FileSystemDirectoryHandle | null = null;
+    const manualExistedBefore = await dirExistsInRoot(activeRootHandle, 'manual');
+    const aiExistedBefore = await dirExistsInRoot(activeRootHandle, 'ai');
 
     try {
       manualRoot = await resolvePillarDir(activeRootHandle, 'manual', true);
@@ -2601,7 +3220,15 @@ export async function runChangeDetectionDiagnostics(): Promise<
           // Ignore cleanup error
         }
       }
+      if (!manualExistedBefore) {
+        await removeDirIfEmpty(activeRootHandle, 'manual');
+      }
+      if (!aiExistedBefore) {
+        await removeDirIfEmpty(activeRootHandle, 'ai');
+      }
+      isChangeDiagRunning = false;
       try {
+        await cleanupOrphanedDiagSyncData(activeRootHandle);
         await scanWorkspaceChanges('diagnostics', {force: true});
       } catch {
         // Ignore post-cleanup scan error
@@ -3156,5 +3783,173 @@ export async function importDemoPdfSource(file: {
     updatedAt,
   };
 }
+
+export async function importReadOnlyFolderFromFiles(
+  fileList: FileList | File[],
+): Promise<{
+  folderName: string;
+  notes: StoredNoteEntry[];
+  sources: SourceDocumentEntry[];
+  problems: ScanProblem[];
+}> {
+  const files = Array.from(fileList);
+  const firstRel = files[0]?.webkitRelativePath || '';
+  const rootFolderName = firstRel.split('/').filter(Boolean)[0] || 'Local Folder';
+  const notes: StoredNoteEntry[] = [];
+  const sources: SourceDocumentEntry[] = [];
+  const problems: ScanProblem[] = [];
+
+  for (const file of files) {
+    const rawRel = (file.webkitRelativePath || file.name).replace(/\\/g, '/');
+    const parts = rawRel.split('/').filter(Boolean);
+    const insideParts =
+      parts.length > 1 && parts[0] === rootFolderName ? parts.slice(1) : parts;
+    if (insideParts.length === 0) {
+      continue;
+    }
+    if (
+      insideParts.some(
+        (seg) =>
+          seg.startsWith('.') ||
+          PROJECT_DEPENDENCY_MARKERS.has(seg.toLowerCase()),
+      )
+    ) {
+      continue;
+    }
+
+    const lowerName = file.name.toLowerCase();
+    const topDir = insideParts[0]?.toLowerCase() ?? '';
+    const relPath = insideParts.join('/');
+
+    if (lowerName.endsWith('.json')) {
+      const pillar: Pillar =
+        topDir === 'ai'
+          ? 'ai'
+          : topDir === 'sources'
+            ? 'sources'
+            : 'manual';
+      const fileNameInPillar =
+        topDir === 'manual' || topDir === 'ai' || topDir === 'sources'
+          ? insideParts.slice(1).join('/')
+          : relPath;
+      if (!fileNameInPillar) {
+        continue;
+      }
+      try {
+        const text = await file.text();
+        const parsed = parseNoteJson(text, pillar);
+        const computedHash = await computeCanonicalContentHash(parsed.content);
+        const note: NoteRecord = {
+          ...parsed,
+          contentHash: computedHash,
+        };
+        const {excerpt, wordCount} = deriveExcerptAndWordCount(note.content);
+        notes.push({
+          note,
+          fileName: fileNameInPillar,
+          pillar,
+          excerpt,
+          wordCount,
+          path: `${pillar}/${fileNameInPillar}`,
+          size: file.size,
+          lastModified: file.lastModified,
+        });
+      } catch (err) {
+        problems.push({
+          id: relPath,
+          path: relPath,
+          pillar,
+          fileName: fileNameInPillar,
+          reason: (err as Error).message || 'Invalid JSON note file.',
+          detectedAt: new Date().toISOString(),
+        });
+      }
+      continue;
+    }
+
+    const isPdf = lowerName.endsWith('.pdf');
+    const isTxt = lowerName.endsWith('.txt');
+    const isMd = lowerName.endsWith('.md') || lowerName.endsWith('.markdown');
+    if (isPdf || isTxt || isMd) {
+      const srcPath =
+        topDir === 'sources' ? relPath : `sources/${relPath}`;
+      const title = file.name.replace(/\.(pdf|txt|md|markdown)$/i, '') || file.name;
+      const updatedAt = new Date(file.lastModified || Date.now()).toISOString();
+      try {
+        if (isPdf) {
+          const buffer = await file.arrayBuffer();
+          const contentHash = await computeBytesSha256(buffer);
+          let chunks: SourceDocumentEntry['chunks'] = [];
+          try {
+            const pages = await extractPdfPagesInWorker(buffer.slice(0));
+            chunks = chunkPdfPages(pages);
+          } catch {
+            chunks = [];
+          }
+          try {
+            await saveDemoSourceFile({
+              id: `source:${srcPath}`,
+              path: srcPath,
+              fileName: file.name,
+              title,
+              size: buffer.byteLength,
+              lastModified: file.lastModified || Date.now(),
+              contentHash,
+              bytes: buffer,
+              updatedAt,
+            });
+          } catch {
+            // Continue in memory if browser storage quota or IndexedDB is restricted
+          }
+          sources.push({
+            id: `source:${srcPath}`,
+            fileName: file.name,
+            path: srcPath,
+            pillar: 'sources',
+            title,
+            kind: 'pdf',
+            size: file.size,
+            lastModified: file.lastModified,
+            contentHash,
+            chunks,
+            updatedAt,
+          });
+        } else {
+          const text = await file.text();
+          const contentHash = await computeSha256(text);
+          const kind = isMd ? 'md' : 'txt';
+          const chunks = chunkPlainTextSource(text, kind);
+          sources.push({
+            id: `source:${srcPath}`,
+            fileName: file.name,
+            path: srcPath,
+            pillar: 'sources',
+            title,
+            kind,
+            size: file.size,
+            lastModified: file.lastModified,
+            contentHash,
+            chunks,
+            updatedAt,
+          });
+        }
+      } catch (err) {
+        problems.push({
+          id: `source:${srcPath}`,
+          path: srcPath,
+          pillar: 'sources',
+          fileName: file.name,
+          reason: (err as Error).message || 'Could not read source file.',
+          detectedAt: new Date().toISOString(),
+        });
+      }
+    }
+  }
+
+  notes.sort((a, b) => b.note.updatedAt.localeCompare(a.note.updatedAt));
+  sources.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return {folderName: rootFolderName, notes, sources, problems};
+}
+
 
 

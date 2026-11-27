@@ -258,7 +258,7 @@ function PdfPageCanvas({
                     ? `2px solid ${style.overlayBorder}`
                     : 'none',
               }}
-              className={`absolute rounded-[2px] transition-all duration-200 ${
+              className={`absolute rounded-[2px] transition-colors duration-200 ${
                 isFlashing ? 'noodle-pdf-highlight-flash' : ''
               }`}
             />
@@ -300,8 +300,8 @@ function PdfPageCanvas({
         );
       })}
 
-      {/* Page Number Watermark Pill */}
-      <div className="pointer-events-none absolute right-2 bottom-2 z-[3] rounded bg-black/65 px-2 py-0.5 font-mono text-[10px] text-white/90 tabular-nums">
+      {/* Page Number Watermark */}
+      <div className="pointer-events-none absolute right-2 bottom-2 z-[3] rounded bg-black/70 px-2 py-0.5 text-[11px] font-medium text-white/90 tabular-nums">
         Page {pageNumber}
         {renderedScale === null ? ' · loading…' : ''}
       </div>
@@ -734,13 +734,13 @@ export function PdfSourceViewer({doc, targetBlockId = null}: PdfSourceViewerProp
       >
         {/* PDF Viewer Controls Bar */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E222E] bg-[#101218] px-4 py-2 text-xs">
-          <div className="flex items-center gap-2 text-[#9CA1AE]">
-            <span className="inline-flex items-center gap-1.5 rounded-md border border-[#272C3A] bg-[#151822] px-2 py-1 text-[11px] font-medium text-[#F3CA77]">
-              <Highlighter className="h-3 w-3" />
+          <div className="flex items-center gap-3 text-[#9CA1AE]">
+            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#F3CA77]">
+              <Highlighter className="h-3.5 w-3.5" />
               <span>Select text to highlight &amp; comment</span>
             </span>
             {pageDims.length > 0 && (
-              <span className="font-mono text-[11px] text-[#8A91A2] tabular-nums">
+              <span className="text-xs text-[#8A91A2] tabular-nums">
                 Page {currentPage} / {pageDims.length}
               </span>
             )}
@@ -753,11 +753,11 @@ export function PdfSourceViewer({doc, targetBlockId = null}: PdfSourceViewerProp
                 setScale((s) => Math.max(0.6, Number((s - 0.15).toFixed(2))))
               }
               aria-label="Zoom out"
-              className="inline-flex h-7 w-7 items-center justify-center rounded border border-[#272C3A] bg-[#151822] text-[#C8CCD6] hover:border-[#3B4357] hover:text-white"
+              className="inline-flex h-8 w-8 items-center justify-center rounded border border-[#272C3A] bg-[#151822] text-[#C8CCD6] hover:border-[#3B4357] hover:text-white"
             >
               <Minus className="h-3.5 w-3.5" />
             </button>
-            <span className="w-12 text-center font-mono text-[11px] text-[#ECEBE6] tabular-nums">
+            <span className="w-12 text-center text-xs font-medium text-[#ECEBE6] tabular-nums">
               {Math.round(scale * 100)}%
             </span>
             <button
@@ -766,14 +766,14 @@ export function PdfSourceViewer({doc, targetBlockId = null}: PdfSourceViewerProp
                 setScale((s) => Math.min(2.2, Number((s + 0.15).toFixed(2))))
               }
               aria-label="Zoom in"
-              className="inline-flex h-7 w-7 items-center justify-center rounded border border-[#272C3A] bg-[#151822] text-[#C8CCD6] hover:border-[#3B4357] hover:text-white"
+              className="inline-flex h-8 w-8 items-center justify-center rounded border border-[#272C3A] bg-[#151822] text-[#C8CCD6] hover:border-[#3B4357] hover:text-white"
             >
               <Plus className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"
               onClick={handleFitWidth}
-              className="ml-1 inline-flex h-7 items-center rounded border border-[#272C3A] bg-[#151822] px-2.5 text-[11px] font-medium text-[#C8CCD6] hover:border-[#3B4357] hover:text-white"
+              className="ml-1 inline-flex h-8 items-center rounded border border-[#272C3A] bg-[#151822] px-2.5 text-xs font-medium text-[#C8CCD6] hover:border-[#3B4357] hover:text-white"
             >
               Fit width
             </button>
@@ -788,7 +788,7 @@ export function PdfSourceViewer({doc, targetBlockId = null}: PdfSourceViewerProp
         >
           {loading ? (
             <div className="mx-auto max-w-xl rounded-xl border border-[#232734] bg-[#13161E] p-6 text-center text-xs text-[#9CA1AE]">
-              Loading PDF via pdf.js (read-only)…
+              Loading PDF…
             </div>
           ) : loadError ? (
             <div className="mx-auto max-w-xl rounded-xl border border-rose-500/40 bg-rose-500/10 p-6 text-xs text-rose-200">
@@ -845,7 +845,7 @@ export function PdfSourceViewer({doc, targetBlockId = null}: PdfSourceViewerProp
               </button>
             </div>
 
-            <p className="mt-1.5 line-clamp-2 rounded border border-[#232836] bg-[#0F1117] px-2.5 py-1.5 text-[11px] leading-relaxed text-[#D8D7D0] italic">
+            <p className="mt-1.5 line-clamp-2 rounded bg-[#0F1117] px-2.5 py-1.5 text-[11px] leading-relaxed text-[#D8D7D0]">
               &ldquo;{pendingSelection.quote}&rdquo;
             </p>
 
@@ -920,40 +920,38 @@ export function PdfSourceViewer({doc, targetBlockId = null}: PdfSourceViewerProp
               <h2 className="font-serif text-sm font-semibold text-[#F5F1E8]">
                 Annotations
               </h2>
-              <span className="rounded bg-[#191D28] px-1.5 py-0.5 font-mono text-[11px] text-[#D8D7D0] tabular-nums">
+              <span className="text-xs font-medium text-[#9CA1AE] tabular-nums">
                 {annotations.length}
               </span>
             </div>
 
             <span
               title={`Keyed by content hash ${verifiedHash}`}
-              className="inline-flex items-center gap-1 font-mono text-[10px] text-[#888F9F]"
+              className="inline-flex items-center gap-1 text-[11px] text-[#888F9F]"
             >
-              <Lock className="h-2.5 w-2.5 text-emerald-400" />
-              <span>{verifiedHash.slice(0, 15)}…</span>
+              <Lock className="h-3 w-3 text-emerald-400" />
+              <span>Verified</span>
             </span>
           </div>
 
           <p className="mt-1 text-[11px] leading-relaxed text-[#7E8597]">
-            Stored in IndexedDB by PDF content hash + text-layer coordinates.
-            PDF bytes are never modified and annotations survive reloads &amp; file moves.
+            Saved locally on this device. Your original PDF file is never
+            modified.
           </p>
         </div>
 
         <div className="flex-1 overflow-y-auto p-3">
           {annotations.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-[#262B38] bg-[#13161E]/60 p-4 text-xs leading-relaxed text-[#8E95A5]">
+            <div className="rounded-xl bg-[#13161E] p-4 text-xs leading-relaxed text-[#8E95A5]">
               No highlights or comments yet. Drag across any text in the PDF
               page to highlight and attach a note.
             </div>
           ) : (
-            <div className="space-y-2.5">
+            <div className="space-y-2">
               {annotations.map((ann) => {
                 const style = getHighlightStyle(ann.color);
                 const isActive = activeAnnotationId === ann.id;
                 const isEditing = editingId === ann.id;
-                const pctX = Math.round(ann.anchor.boundingBox.x * 100);
-                const pctY = Math.round(ann.anchor.boundingBox.y * 100);
 
                 return (
                   <div
@@ -967,10 +965,10 @@ export function PdfSourceViewer({doc, targetBlockId = null}: PdfSourceViewerProp
                         jumpToAnnotation(ann);
                       }
                     }}
-                    className={`group cursor-pointer rounded-xl border p-3 transition-colors ${
+                    className={`group cursor-pointer rounded-xl p-3 transition-colors ${
                       isActive
-                        ? 'border-[#E0A83E]/65 bg-[#171B26]'
-                        : 'border-[#212533] bg-[#13161E] hover:border-[#343B4F] hover:bg-[#161A24]'
+                        ? 'border-l-2 border-[#E0A83E] bg-[#171B26]'
+                        : 'bg-[#13161E] hover:bg-[#161A24]'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -978,11 +976,8 @@ export function PdfSourceViewer({doc, targetBlockId = null}: PdfSourceViewerProp
                         <span
                           className={`h-2.5 w-2.5 rounded-full ${style.swatchClass}`}
                         />
-                        <span className="font-mono text-[11px] font-semibold text-[#ECEBE6] tabular-nums">
+                        <span className="text-xs font-semibold text-[#ECEBE6] tabular-nums">
                           Page {ann.anchor.pageNumber}
-                        </span>
-                        <span className="font-mono text-[10px] text-[#767D8F] tabular-nums">
-                          ({pctX}%, {pctY}%)
                         </span>
                       </div>
 
@@ -1002,14 +997,14 @@ export function PdfSourceViewer({doc, targetBlockId = null}: PdfSourceViewerProp
                           type="button"
                           onClick={() => void handleDeleteAnnotation(ann.id)}
                           aria-label="Delete annotation"
-                          className="rounded p-1 text-[#888F9F] hover:bg-rose-500/15 hover:text-rose-300"
+                          className="rounded p-1 text-[#888F9F] hover:bg-[#241419] hover:text-rose-300"
                         >
                           <Trash2 className="h-3 w-3" />
                         </button>
                       </div>
                     </div>
 
-                    <blockquote className="mt-2 border-l-2 border-[#363D52] pl-2.5 text-xs leading-relaxed text-[#D8D7D0] italic">
+                    <blockquote className="mt-2 border-l-2 border-[#363D52] pl-2.5 text-xs leading-relaxed text-[#D8D7D0]">
                       &ldquo;{ann.quote}&rdquo;
                     </blockquote>
 

@@ -23,8 +23,8 @@ interface ConnectionsPanelProps {
 
 const PILLAR_LABEL: Record<Pillar, string> = {
   sources: 'Sources',
-  manual: 'Manual Notes',
-  ai: 'AI Outputs',
+  manual: 'My Notes',
+  ai: 'AI Notes',
 };
 
 export function ConnectionsPanel({
@@ -49,24 +49,23 @@ export function ConnectionsPanel({
           <div className="flex items-center gap-2">
             <Link2 className="h-4 w-4 text-[#E0A83E]" />
             <h2 className="font-serif text-base font-semibold text-[#F4F0E7]">
-              Backlinks
+              Linked Notes
             </h2>
             <span className="text-xs text-[#7D8496] tabular-nums">
-              · {backlinks.length} explicit {backlinks.length === 1 ? 'link' : 'links'}
+              · {backlinks.length} {backlinks.length === 1 ? 'link' : 'links'}
             </span>
           </div>
           <span className="text-[11px] text-[#767D8F]">
-            Linked to stable block IDs
+            Links directly to the matching section
           </span>
         </div>
 
         {backlinks.length === 0 ? (
           <p className="text-xs text-[#7D8496]">
-            No explicit backlinks yet. Accept a suggested connection below to
-            create one.
+            No linked notes yet. Click Link on any suggestion below to add one.
           </p>
         ) : (
-          <div className="divide-y divide-[#1E222E] rounded-xl border border-[#232734] bg-[#13161E]">
+          <div className="space-y-1.5">
             {backlinks.map((link) => {
               const isOutgoing = link.sourceNoteId === currentNoteId;
               const jumpNoteId = isOutgoing
@@ -83,7 +82,7 @@ export function ConnectionsPanel({
               return (
                 <div
                   key={link.id}
-                  className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-xs"
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[#13161E] px-4 py-3 text-xs"
                 >
                   <button
                     type="button"
@@ -96,10 +95,6 @@ export function ConnectionsPanel({
                       <span>{isOutgoing ? 'Links to' : 'Linked from'}</span>
                       <span aria-hidden="true">·</span>
                       <span>{PILLAR_LABEL[link.targetPillar]}</span>
-                      <span aria-hidden="true">·</span>
-                      <span className="font-mono text-[#767D8F]">
-                        block {jumpBlockId.slice(0, 12)}
-                      </span>
                     </div>
                     <p className="mt-1 inline-flex items-center gap-1 font-medium text-[#ECEBE6] group-hover:text-[#F4D084]">
                       <span className="truncate">{displayTitle}</span>
@@ -109,11 +104,11 @@ export function ConnectionsPanel({
 
                   {link.readOnly ? (
                     <span
-                      title="AI synthesis provenance backlink (read-only)"
+                      title="Read-only link from AI note"
                       className="inline-flex h-7 items-center gap-1 px-2 text-[11px] font-medium text-[#888F9F]"
                     >
                       <Lock className="h-3 w-3 text-violet-300" />
-                      <span>Read-only provenance</span>
+                      <span>Read-only AI link</span>
                     </span>
                   ) : (
                     <button
@@ -139,27 +134,27 @@ export function ConnectionsPanel({
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-[#E0A83E]" />
             <h2 className="font-serif text-base font-semibold text-[#F4F0E7]">
-              Suggested Connections
+              Related Notes
             </h2>
             <span className="text-xs text-[#7D8496]">
               ·{' '}
               {mode === 'semantic'
-                ? 'On-device semantic similarity'
+                ? 'Semantic similarity'
                 : 'Word-match fallback (model not downloaded)'}
             </span>
           </div>
           <span className="text-[11px] text-[#767D8F]">
-            From other folders · never auto-linked
+            From other folders · only linked when you choose
           </span>
         </div>
 
         {loading ? (
           <p className="text-xs text-[#888F9F]">
-            Checking other folders for related blocks...
+            Checking other folders for related notes...
           </p>
         ) : suggestions.length === 0 ? (
           <p className="text-xs text-[#7D8496]">
-            No unlinked suggestions found in other folders yet.
+            No related notes found in other folders yet.
           </p>
         ) : (
           <div className="space-y-2.5">
@@ -170,7 +165,7 @@ export function ConnectionsPanel({
               >
                 <div className="min-w-0 flex-1 space-y-1.5">
                   <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#8990A2]">
-                    <span className="font-mono font-semibold text-[#E0A83E] tabular-nums">
+                    <span className="font-semibold text-[#E0A83E] tabular-nums">
                       {item.score.toFixed(2)} {item.scoreLabel}
                     </span>
                     <span aria-hidden="true">·</span>

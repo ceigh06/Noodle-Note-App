@@ -8,16 +8,32 @@ export const WHISPER_MODELS: Array<{
   description: string;
 }> = [
   {
+    id: 'onnx-community/whisper-base.en',
+    label: 'Whisper Base English (Recommended · Accurate)',
+    sizeHint: '~136 MB hybrid (fp32 + q8)',
+    description:
+      'High-accuracy English speech-to-text for study terms, accents, and search queries.',
+  },
+  {
+    id: 'onnx-community/whisper-base',
+    label: 'Whisper Base Multilingual (99 languages)',
+    sizeHint: '~140 MB hybrid (fp32 + q8)',
+    description:
+      'Accurate multilingual speech-to-text across English and 98 other languages.',
+  },
+  {
     id: 'onnx-community/whisper-tiny.en',
-    label: 'Whisper Tiny English (onnx-community)',
-    sizeHint: '~41 MB quantized (q8)',
-    description: 'Fast English speech-to-text tuned for Transformers.js in Web Workers.',
+    label: 'Whisper Tiny English (Fast & Compact)',
+    sizeHint: '~64 MB hybrid (fp32 + q8)',
+    description:
+      'Lighter download and faster local transcription on older devices.',
   },
   {
     id: 'Xenova/whisper-tiny.en',
-    label: 'Whisper Tiny English (Xenova)',
-    sizeHint: '~41 MB quantized (q8)',
-    description: 'Classic Xenova Whisper Tiny English ONNX weights cached in browser storage.',
+    label: 'Whisper Tiny English (Xenova Legacy)',
+    sizeHint: '~64 MB hybrid (fp32 + q8)',
+    description:
+      'Classic Xenova Whisper Tiny English ONNX weights cached in browser storage.',
   },
 ];
 

@@ -1,4 +1,4 @@
-import {createUuid, ensureBlockIds} from '../editor/noteSchema';
+import {createUuid, ensureBlockIds, isAllowedLinkUrl} from '../editor/noteSchema';
 import {
   AiExamQuestion,
   AiFlashcardItem,
@@ -11,6 +11,7 @@ import {
   TipTapDoc,
   TipTapNode,
   ValidatedSynthesisOutput,
+  WebGroundingCitation,
 } from '../types/noodle';
 
 export const MAX_CLOUD_EXCERPT_CHARS = 800;
@@ -457,6 +458,8 @@ export function buildTipTapDocFromSynthesis(params: {
   model: string;
   question: string;
   generatedAt: string;
+  webCitations?: WebGroundingCitation[];
+  webGroundingNotice?: string;
 }): {
   doc: TipTapDoc;
   aiMeta: AiNoteMetadata;
@@ -471,6 +474,8 @@ export function buildTipTapDocFromSynthesis(params: {
     model,
     question,
     generatedAt,
+    webCitations,
+    webGroundingNotice,
   } = params;
 
   const nodes: TipTapNode[] = [];
@@ -661,7 +666,7 @@ export function buildTipTapDocFromSynthesis(params: {
     nodes.push({
       type: 'heading',
       attrs: {id: createUuid(), level: 2},
-      content: [{type: 'text', text: 'Sources Cited (Provenance)'}],
+      content: [{type: 'text', text: 'Sources Used'}],
     });
     nodes.push({
       type: 'bulletList',
@@ -682,6 +687,52 @@ export function buildTipTapDocFromSynthesis(params: {
           },
         ],
       })),
+    });
+  }
+
+  if (webCitations && webCitations.length > 0) {
+    nodes.push({
+      type: 'heading',
+      attrs: {id: createUuid(), level: 2},
+      content: [{type: 'text', text: 'Web Sources'}],
+    });
+    if (webGroundingNotice) {
+      nodes.push({
+        type: 'paragraph',
+        attrs: {id: createUuid()},
+        content: [{type: 'text', text: webGroundingNotice}],
+      });
+    }
+    nodes.push({
+      type: 'bulletList',
+      attrs: {id: createUuid()},
+      content: webCitations.map((wc) => {
+        const label = wc.title ? `${wc.title} (${wc.domain})` : wc.domain;
+        const safeUrl = isAllowedLinkUrl(wc.url);
+        return {
+          type: 'listItem',
+          attrs: {id: createUuid()},
+          content: [
+            {
+              type: 'paragraph',
+              attrs: {id: createUuid()},
+              content: [
+                safeUrl
+                  ? {
+                      type: 'text',
+                      text: label,
+                      marks: [{type: 'link', attrs: {href: wc.url}}],
+                    }
+                  : {
+                      type: 'text',
+                      text: label,
+                    },
+                ...(wc.claim ? [{type: 'text' as const, text: ` — ${wc.claim}`}] : []),
+              ],
+            },
+          ],
+        };
+      }),
     });
   }
 

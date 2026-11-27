@@ -16,6 +16,7 @@ import {
   StoredNoteEntry,
   SynthesisOutputFormat,
   TipTapDoc,
+  ValidatedSynthesisOutput,
 } from '../types/noodle';
 import {getUnlockedSessionKey} from './keyVault';
 import {CloudProviderAdapter, getProviderAdapter} from './providerAdapter';
@@ -407,6 +408,7 @@ export async function validateAndPersistAiSynthesisResult(params: {
 }): Promise<{
   savedEntry: StoredNoteEntry;
   createdBacklinks: BacklinkRecord[];
+  verifiedOutput: ValidatedSynthesisOutput;
 }> {
   const targetPillar = params.targetPillar ?? 'ai';
   if (targetPillar !== 'ai') {
@@ -473,6 +475,8 @@ export async function validateAndPersistAiSynthesisResult(params: {
       model: params.response.model,
       question: params.response.question,
       generatedAt: params.response.createdAt,
+      webCitations: params.response.webCitations,
+      webGroundingNotice: params.response.webGroundingNotice,
     });
 
   const savedEntry = await params.persistAiNote({
@@ -531,5 +535,5 @@ export async function validateAndPersistAiSynthesisResult(params: {
     createdBacklinks.push(record);
   }
 
-  return {savedEntry, createdBacklinks};
+  return {savedEntry, createdBacklinks, verifiedOutput};
 }

@@ -12,7 +12,6 @@ import {
   Mic,
   MicOff,
   Radio,
-  Settings,
   ShieldAlert,
   Sliders,
   X,
@@ -97,7 +96,7 @@ export function SettingsPage({
     setWakeError(null);
     if (enabled) {
       if (!voiceSettings.experimentalVoiceEnabled) {
-        setWakeError('Enable Experimental Voice Search (Step 1) first.');
+        setWakeError('Turn on Voice Search above first.');
         return;
       }
       if (!porcupineAccessKey.trim()) {
@@ -148,26 +147,21 @@ export function SettingsPage({
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6 px-4 py-6 lg:px-8">
       {/* Page Header */}
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#202430] pb-5">
+      <div className="flex flex-wrap items-end justify-between gap-4 pb-1">
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs font-medium text-[#E0A83E]">
-            <Settings className="h-3.5 w-3.5" />
-            <span>Experimental Hardware &amp; Local Voice Controls</span>
-          </div>
-          <h1 className="font-serif text-2xl font-semibold tracking-tight text-[#F5F1E8] sm:text-3xl">
+          <h1 className="font-serif text-2xl font-semibold text-[#F5F1E8] sm:text-3xl">
             Settings
           </h1>
-          <p className="text-xs text-[#9198A8] sm:text-sm">
-            Configure experimental local voice search, microphone kill switch,
-            and optional wake word detection. Everything runs strictly in RAM
-            with zero audio stored or sent off device.
+          <p className="max-w-prose text-xs text-[#9198A8] sm:text-sm">
+            Voice search and microphone controls. Audio stays in temporary memory
+            and is never saved or sent online.
           </p>
         </div>
 
         <button
           type="button"
           onClick={() => onNavigate('/workspace')}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[#282D3B] bg-[#141720] px-3.5 py-2 text-xs font-medium text-[#C8CCD6] transition-colors hover:border-[#383F52] hover:text-[#ECEBE6]"
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#282D3B] bg-[#141720] px-3.5 text-xs font-medium text-[#C8CCD6] transition-colors hover:border-[#383F52] hover:text-[#ECEBE6]"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
           <span>Back to Workspace</span>
@@ -177,37 +171,34 @@ export function SettingsPage({
       {/* Master Kill Switch Banner */}
       <section
         aria-label="Master Microphone Kill Switch"
-        className="rounded-xl border border-rose-500/35 bg-[#161217] p-5 space-y-4"
+        className="space-y-4 rounded-xl border border-[#4D242E] bg-[#161217] p-5"
       >
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="space-y-1.5 max-w-2xl">
-            <div className="flex items-center gap-2">
+          <div className="max-w-2xl space-y-1.5">
+            <div className="flex flex-wrap items-center gap-3">
               <MicOff className="h-4 w-4 text-rose-400" />
               <h2 className="font-serif text-base font-semibold text-[#F6ECEE]">
-                Master Microphone Kill Switch
+                Turn Off Microphone Now
               </h2>
               <span
                 data-testid="active-mic-tracks-badge"
-                className={`rounded border px-2 py-0.5 font-mono text-[11px] tabular-nums ${
+                className={`text-xs font-medium tabular-nums ${
                   voiceRuntime.activeTrackCount > 0
-                    ? 'border-rose-400/50 bg-rose-500/20 text-rose-200'
-                    : 'border-emerald-500/35 bg-emerald-500/10 text-emerald-300'
+                    ? 'text-rose-300'
+                    : 'text-emerald-300'
                 }`}
               >
                 {voiceRuntime.activeTrackCount} active mic track
                 {voiceRuntime.activeTrackCount === 1 ? '' : 's'}
               </span>
             </div>
-            <p className="text-xs leading-relaxed text-[#C9BAC0]">
-              Immediately calls <code className="font-mono">track.stop()</code>{' '}
-              on every active microphone <code className="font-mono">MediaStreamTrack</code>,
-              closes audio capture contexts, stops any Porcupine wake-word
-              processor, wipes RAM buffers, and disables voice search so the
-              browser microphone indicator turns off immediately.
+            <p className="max-w-prose text-xs leading-relaxed text-[#C9BAC0]">
+              Disconnects every active microphone stream, clears temporary audio
+              memory, and turns off voice search immediately.
             </p>
-            <p className="font-mono text-[11px] text-[#9A8A90]">
-              Browser mic permission handle state:{' '}
-              <span className="text-[#E5D5DA]">
+            <p className="text-[11px] text-[#9A8A90]">
+              Microphone permission:{' '}
+              <span className="font-medium text-[#E5D5DA]">
                 {voiceRuntime.micPermissionState}
               </span>
             </p>
@@ -217,58 +208,54 @@ export function SettingsPage({
             type="button"
             onClick={() => void handleKillClick()}
             disabled={busyAction === 'kill'}
-            className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border border-rose-400/60 bg-rose-600 px-4 text-xs font-semibold text-white transition-colors hover:bg-rose-500 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
+            className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg bg-rose-600 px-4 text-xs font-semibold text-white transition-colors hover:bg-rose-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400 disabled:opacity-50"
           >
             <MicOff className="h-4 w-4" />
             <span>
               {busyAction === 'kill'
-                ? 'Stopping tracks...'
-                : 'Kill All Microphone Tracks & Disable Voice'}
+                ? 'Stopping microphone...'
+                : 'Turn Off Microphone & Voice'}
             </span>
           </button>
         </div>
 
         {killReport && (
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3.5 py-2.5 text-xs text-emerald-200">
+          <div className="flex flex-wrap items-center gap-2 rounded-lg bg-[#121D19] px-3.5 py-2.5 text-xs text-emerald-200 tabular-nums">
             <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
             <span>
-              Kill switch executed: stopped{' '}
-              <strong className="font-mono">{killReport.stoppedTrackCount}</strong>{' '}
-              track(s), closed{' '}
-              <strong className="font-mono">{killReport.closedAudioContextCount}</strong>{' '}
-              audio context(s), remaining active tracks:{' '}
-              <strong className="font-mono">{killReport.remainingActiveTracks}</strong>.
-              Voice search and wake word are now OFF.
+              Stopped <strong>{killReport.stoppedTrackCount}</strong> mic
+              stream(s) and cleared{' '}
+              <strong>{killReport.closedAudioContextCount}</strong> audio
+              session(s). Active streams remaining:{' '}
+              <strong>{killReport.remainingActiveTracks}</strong>. Voice search
+              is now OFF.
             </span>
           </div>
         )}
       </section>
 
-      {/* Step 1: Experimental Voice Search + Push-to-Talk + Local Whisper */}
+      {/* Voice Search + Push-to-Talk + Local Whisper */}
       <section
-        aria-label="Step 1 Voice Search Push-to-Talk and Whisper"
-        className="rounded-xl border border-[#232734] bg-[#13161E] p-5 space-y-5"
+        aria-label="Voice Search Push-to-Talk and Whisper"
+        className="space-y-5 rounded-xl border border-[#232734] bg-[#13161E] p-5"
       >
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#202430] pb-4">
-          <div className="space-y-1 max-w-xl">
+        <div className="flex flex-wrap items-start justify-between gap-4 pb-1">
+          <div className="max-w-xl space-y-1">
             <div className="flex items-center gap-2">
               <Mic className="h-4 w-4 text-[#E0A83E]" />
               <h2 className="font-serif text-base font-semibold text-[#F5F1E8]">
-                Step 1 · Experimental Voice Search (OFF by default)
+                Voice Search
               </h2>
             </div>
             <p className="text-xs leading-relaxed text-[#9CA1AE]">
-              Hold an in-app push-to-talk hotkey or mic button to capture
-              audio in RAM, transcribe locally inside a{' '}
-              <strong className="text-[#ECEBE6]">Whisper Web Worker</strong> via
-              Transformers.js, and feed the transcript directly into on-device
-              semantic search.
+              Off by default. Hold your shortcut key or mic button to speak a
+              search query locally.
             </p>
           </div>
 
           <label className="relative inline-flex cursor-pointer items-center gap-2.5">
             <span className="text-xs font-medium text-[#C8CCD6]">
-              {voiceSettings.experimentalVoiceEnabled ? 'Enabled' : 'OFF (Default)'}
+              {voiceSettings.experimentalVoiceEnabled ? 'Enabled' : 'Off'}
             </span>
             <input
               type="checkbox"
@@ -277,22 +264,21 @@ export function SettingsPage({
               onChange={(e) => void handleToggleExperimentalVoice(e.target.checked)}
               className="peer sr-only"
             />
-            <div className="relative h-6 w-11 rounded-full bg-[#222736] after:absolute after:top-[2px] after:left-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-[#E0A83E] peer-checked:after:translate-x-full peer-focus:outline-none" />
+            <div className="relative h-6 w-11 rounded-full bg-[#222736] after:absolute after:top-[2px] after:left-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-transform after:duration-150 after:content-[''] peer-checked:bg-[#E0A83E] peer-checked:after:translate-x-full peer-focus:outline-none" />
           </label>
         </div>
 
         {/* Plain Browser Limitation Statement */}
-        <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/35 bg-amber-500/8 px-3.5 py-3 text-xs text-amber-100">
+        <div className="flex items-start gap-2.5 rounded-lg bg-[#191610] px-3.5 py-3 text-xs text-amber-100">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
           <div className="space-y-1">
             <p className="font-semibold text-amber-200">
-              Browser limitation: no global hotkey or system tray
+              Browser limitation: works only while this tab is active
             </p>
-            <p className="leading-relaxed text-amber-100/90">
-              A global OS-wide hotkey and system tray icon are{' '}
-              <strong>not possible in a web browser</strong>. Push-to-talk works
-              only while this Noodle browser tab is focused, and microphone tracks
-              are released immediately upon key release.
+            <p className="leading-relaxed text-amber-100/85">
+              Browsers do not allow global OS-wide hotkeys or tray icons.
+              Push-to-talk works while this Noodle tab is focused and releases
+              the microphone immediately on release.
             </p>
           </div>
         </div>
@@ -300,7 +286,7 @@ export function SettingsPage({
         {/* Hotkey configuration + Local Whisper Model */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {/* Push-to-talk hotkey */}
-          <div className="space-y-3 rounded-lg border border-[#222634] bg-[#0E1015] p-4">
+          <div className="space-y-3 rounded-lg bg-[#0E1015] p-4">
             <div className="flex items-center gap-2 text-xs font-semibold text-[#ECEBE6]">
               <Keyboard className="h-3.5 w-3.5 text-[#E0A83E]" />
               <span>In-App Push-to-Talk Hotkey</span>
@@ -361,10 +347,10 @@ export function SettingsPage({
                     recordingHotkey ? handleRecordHotkeyKeyDown : undefined
                   }
                   onBlur={() => setRecordingHotkey(false)}
-                  className={`rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  className={`h-8 rounded-md px-2.5 text-[11px] font-medium transition-colors ${
                     recordingHotkey
-                      ? 'border-[#E0A83E] bg-[#E0A83E]/20 text-[#F6DFA8]'
-                      : 'border-[#2B3142] bg-[#151822] text-[#B8BDC9] hover:text-white'
+                      ? 'bg-[#2C2415] text-[#F6DFA8]'
+                      : 'border border-[#2B3142] bg-[#151822] text-[#B8BDC9] hover:text-white'
                   }`}
                 >
                   {recordingHotkey ? 'Press shortcut key…' : 'Record custom'}
@@ -374,22 +360,22 @@ export function SettingsPage({
           </div>
 
           {/* Local Whisper model in Web Worker */}
-          <div className="space-y-3 rounded-lg border border-[#222634] bg-[#0E1015] p-4">
+          <div className="space-y-3 rounded-lg bg-[#0E1015] p-4">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs font-semibold text-[#ECEBE6]">
                 <Cpu className="h-3.5 w-3.5 text-[#E0A83E]" />
-                <span>Local Whisper Model (Web Worker)</span>
+                <span>Offline Speech Model</span>
               </div>
               <span
-                className={`font-mono text-[10px] ${
+                className={`text-[11px] font-medium ${
                   voiceSettings.whisperDownloaded
                     ? 'text-emerald-400'
                     : 'text-[#888F9F]'
                 }`}
               >
                 {voiceSettings.whisperDownloaded
-                  ? 'Cached offline'
-                  : 'Not cached yet'}
+                  ? 'Saved offline'
+                  : 'Not downloaded yet'}
               </span>
             </div>
 
@@ -412,12 +398,22 @@ export function SettingsPage({
               ))}
             </select>
 
+            <p className="text-[11px] leading-relaxed text-[#8E95A5]">
+              {
+                (
+                  WHISPER_MODELS.find(
+                    (m) => m.id === voiceSettings.whisperModelId,
+                  ) ?? WHISPER_MODELS[0]
+                ).description
+              }
+            </p>
+
             <div className="flex flex-wrap items-center gap-2">
               {isWhisperBusy ? (
                 <button
                   type="button"
                   onClick={onCancelWhisperWork}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-500/45 bg-rose-500/12 px-3 text-xs font-semibold text-rose-200 hover:bg-rose-500/20"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#5A2934] bg-[#241419] px-3 text-xs font-semibold text-rose-200 hover:bg-[#311A21]"
                 >
                   <X className="h-3.5 w-3.5" />
                   <span>Cancel</span>
@@ -431,19 +427,19 @@ export function SettingsPage({
                   <Download className="h-3.5 w-3.5" />
                   <span>
                     {voiceSettings.whisperDownloaded
-                      ? 'Verify Whisper in Worker'
-                      : 'Download & Test Whisper'}
+                      ? 'Test Speech Model'
+                      : 'Download Speech Model'}
                   </span>
                 </button>
               )}
 
               <span className="text-[11px] text-[#7D8496]">
-                Runs via <code className="font-mono">@huggingface/transformers</code>
+                Runs offline in your browser
               </span>
             </div>
 
             {(isWhisperBusy || whisperProgress.message) && (
-              <div className="space-y-1.5 rounded border border-[#232734] bg-[#13161E] p-2.5 text-[11px]">
+              <div className="space-y-1.5 rounded-lg bg-[#13161E] p-2.5 text-[11px]">
                 <div className="flex items-center justify-between gap-2">
                   <span className="inline-flex items-center gap-1.5 text-[#D8D7D0]">
                     {isWhisperBusy && (
@@ -452,13 +448,13 @@ export function SettingsPage({
                     <span>{whisperProgress.message || whisperProgress.status}</span>
                   </span>
                   {isWhisperBusy && (
-                    <span className="font-mono text-[#9CA1AE] tabular-nums">
+                    <span className="text-[#9CA1AE] tabular-nums">
                       {whisperProgress.progress}%
                     </span>
                   )}
                 </div>
                 {isWhisperBusy && (
-                  <div className="h-1 w-full overflow-hidden rounded-full bg-[#1C202B]">
+                  <div className="h-1 w-full overflow-hidden rounded-sm bg-[#1C202B]">
                     <div
                       className="h-full bg-[#E0A83E] transition-[width] duration-150"
                       style={{
@@ -473,29 +469,28 @@ export function SettingsPage({
         </div>
       </section>
 
-      {/* Step 2 (Last, Optional): Picovoice Porcupine Wake Word */}
+      {/* Optional: Picovoice Porcupine Wake Word */}
       <section
-        aria-label="Step 2 Optional Wake Word with Picovoice Porcupine"
-        className="rounded-xl border border-[#232734] bg-[#13161E] p-5 space-y-4"
+        aria-label="Optional Wake Word with Picovoice Porcupine"
+        className="space-y-4 rounded-xl border border-[#232734] bg-[#13161E] p-5"
       >
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#202430] pb-4">
-          <div className="space-y-1 max-w-xl">
+        <div className="flex flex-wrap items-start justify-between gap-4 pb-1">
+          <div className="max-w-xl space-y-1">
             <div className="flex items-center gap-2">
               <Radio className="h-4 w-4 text-[#E0A83E]" />
               <h2 className="font-serif text-base font-semibold text-[#F5F1E8]">
-                Step 2 (Optional) · Wake Word via Picovoice Porcupine Web SDK
+                Hands-Free Wake Word (Optional)
               </h2>
             </div>
             <p className="text-xs leading-relaxed text-[#9CA1AE]">
-              Optionally listen locally for a wake word before capturing an
-              utterance for Whisper transcription and semantic search. Off by
-              default and requires Experimental Voice Search above to be ON.
+              Listen on your device for a trigger word before voice search.
+              Requires Voice Search above to be enabled.
             </p>
           </div>
 
           <label className="relative inline-flex cursor-pointer items-center gap-2.5">
             <span className="text-xs font-medium text-[#C8CCD6]">
-              {voiceSettings.wakeWordEnabled ? 'Listening' : 'OFF (Default)'}
+              {voiceSettings.wakeWordEnabled ? 'Listening' : 'Off'}
             </span>
             <input
               type="checkbox"
@@ -505,76 +500,76 @@ export function SettingsPage({
               onChange={(e) => void handleToggleWakeWord(e.target.checked)}
               className="peer sr-only"
             />
-            <div className="relative h-6 w-11 rounded-full bg-[#222736] after:absolute after:top-[2px] after:left-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-[#E0A83E] peer-checked:after:translate-x-full peer-disabled:opacity-40 peer-focus:outline-none" />
+            <div className="relative h-6 w-11 rounded-full bg-[#222736] after:absolute after:top-[2px] after:left-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-transform after:duration-150 after:content-[''] peer-checked:bg-[#E0A83E] peer-checked:after:translate-x-full peer-disabled:opacity-40 peer-focus:outline-none" />
           </label>
         </div>
 
-        {/* Licensing & Key Privacy Notice */}
-        <div className="flex items-start gap-2.5 rounded-lg border border-[#2A3040] bg-[#0F1219] px-3.5 py-3 text-xs text-[#B8C0D0]">
-          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[#E0A83E]" />
-          <div className="space-y-1">
-            <p className="font-semibold text-[#F2EEE4]">
-              Picovoice AccessKey &amp; Licensing Requirement
-            </p>
-            <p className="leading-relaxed">{PICOVOICE_LICENSING_SUMMARY}</p>
-          </div>
-        </div>
+        {/* Progressive disclosure: Licensing & Key Privacy Notice */}
+        <details className="rounded-lg bg-[#0E1015] px-3.5 py-2.5 text-xs text-[#B8C0D0]">
+          <summary className="flex cursor-pointer items-center gap-2 font-medium text-[#ECEBE6] select-none">
+            <ShieldAlert className="h-4 w-4 shrink-0 text-[#E0A83E]" />
+            <span>Picovoice AccessKey &amp; licensing details</span>
+          </summary>
+          <p className="mt-2 leading-relaxed text-[#9CA1AE]">
+            {PICOVOICE_LICENSING_SUMMARY}
+          </p>
+        </details>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {/* AccessKey input (session RAM only) */}
           <div className="space-y-2">
-            <label
-              htmlFor="noodle-picovoice-access-key"
-              className="block text-xs font-medium text-[#C8CCD6]"
-            >
-              Your Picovoice AccessKey (held in session RAM only)
-            </label>
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1">
-                <input
-                  id="noodle-picovoice-access-key"
-                  type={showKey ? 'text' : 'password'}
-                  value={porcupineAccessKey}
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(e) => {
-                    setWakeError(null);
-                    onChangePorcupineAccessKey(e.target.value);
-                  }}
-                  placeholder="Paste your Picovoice Console AccessKey..."
-                  className="h-9 w-full rounded-lg border border-[#282D3B] bg-[#0E1015] pr-9 pl-3 font-mono text-xs text-[#ECEBE6] placeholder-[#656C7D] focus:border-[#E0A83E]/60 focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowKey((prev) => !prev)}
-                  aria-label={showKey ? 'Hide AccessKey' : 'Show AccessKey'}
-                  className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-[#7D8496] hover:text-[#ECEBE6]"
-                >
-                  {showKey ? (
-                    <EyeOff className="h-3.5 w-3.5" />
-                  ) : (
-                    <Eye className="h-3.5 w-3.5" />
-                  )}
-                </button>
+              <label
+                htmlFor="noodle-picovoice-access-key"
+                className="block text-xs font-medium text-[#C8CCD6]"
+              >
+                Your Picovoice AccessKey (kept in temporary memory only)
+              </label>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    id="noodle-picovoice-access-key"
+                    type={showKey ? 'text' : 'password'}
+                    value={porcupineAccessKey}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(e) => {
+                      setWakeError(null);
+                      onChangePorcupineAccessKey(e.target.value);
+                    }}
+                    placeholder="Paste your Picovoice Console AccessKey..."
+                    className="h-9 w-full rounded-lg border border-[#282D3B] bg-[#0E1015] pr-9 pl-3 font-mono text-xs text-[#ECEBE6] placeholder-[#656C7D] focus:border-[#E0A83E]/60 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKey((prev) => !prev)}
+                    aria-label={showKey ? 'Hide AccessKey' : 'Show AccessKey'}
+                    className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-[#7D8496] hover:text-[#ECEBE6]"
+                  >
+                    {showKey ? (
+                      <EyeOff className="h-3.5 w-3.5" />
+                    ) : (
+                      <Eye className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </div>
+                {porcupineAccessKey && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onChangePorcupineAccessKey('');
+                      if (voiceSettings.wakeWordEnabled) {
+                        void onUpdateVoiceSettings({wakeWordEnabled: false});
+                      }
+                    }}
+                    className="h-9 rounded-lg border border-[#282D3B] bg-[#161922] px-3 text-xs text-[#B8BDC9] hover:text-white"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
-              {porcupineAccessKey && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onChangePorcupineAccessKey('');
-                    if (voiceSettings.wakeWordEnabled) {
-                      void onUpdateVoiceSettings({wakeWordEnabled: false});
-                    }
-                  }}
-                  className="h-9 rounded-lg border border-[#282D3B] bg-[#161922] px-3 text-xs text-[#B8BDC9] hover:text-white"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-            <p className="text-[11px] text-[#7D8496]">
-              Never hard-coded or saved to IndexedDB, localStorage, or disk.
-            </p>
+              <p className="text-[11px] text-[#7D8496]">
+                Never saved to your browser or hard drive.
+              </p>
           </div>
 
           {/* Built-in keyword selector */}
@@ -614,7 +609,7 @@ export function SettingsPage({
         </div>
 
         {(wakeError || voiceRuntime.lastError) && (
-          <p className="rounded-lg border border-rose-500/35 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+          <p className="rounded-lg bg-[#201318] px-3.5 py-2.5 text-xs text-rose-200">
             {wakeError || voiceRuntime.lastError}
           </p>
         )}

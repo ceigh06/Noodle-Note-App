@@ -7,7 +7,6 @@ import {
   Circle,
   FileText,
   GitMerge,
-  GraduationCap,
   Search,
 } from 'lucide-react';
 import {noodleDb} from '../db/noodleDb';
@@ -216,11 +215,11 @@ export function StudyPage({
     () => [
       {
         id: 'step-1-sources',
-        title: '1. Audit matched primary source materials',
+        title: '1. Review matched source readings',
         detail: topSource
-          ? `Start with "${topSource.title}" (${topSource.percentMatch}% ${topSource.scoreLabel}) and verify key definitions or derivations.`
-          : 'Review reference PDFs, markdown, or text documents in sources/ relevant to your study prompt.',
-        linkLabel: topSource ? `Open ${topSource.title}` : 'Browse Workspace Sources',
+          ? `Start with "${topSource.title}" (${topSource.percentMatch}% ${topSource.scoreLabel}) and check key definitions.`
+          : 'Open your PDFs or text readings in Sources for this topic.',
+        linkLabel: topSource ? `Open ${topSource.title}` : 'Browse Sources',
         onFollowLink: () => {
           if (topSource) {
             onNavigateToBlock(
@@ -235,11 +234,11 @@ export function StudyPage({
       },
       {
         id: 'step-2-manual',
-        title: '2. Revisit and tighten your manual notes',
+        title: '2. Update your personal notes',
         detail: topManual
-          ? `Review "${topManual.title}" (${topManual.percentMatch}% ${topManual.scoreLabel}) and add worked examples or gaps in your own words.`
-          : 'Open or create a manual note in manual/ to summarize theorems, traps, and worked examples.',
-        linkLabel: topManual ? `Edit ${topManual.title}` : 'Open Workspace Notes',
+          ? `Review "${topManual.title}" (${topManual.percentMatch}% ${topManual.scoreLabel}) and add examples in your own words.`
+          : 'Open or create a note in My Notes to summarize key ideas and examples.',
+        linkLabel: topManual ? `Edit ${topManual.title}` : 'Open My Notes',
         onFollowLink: () => {
           if (topManual) {
             onNavigateToBlock(
@@ -254,25 +253,25 @@ export function StudyPage({
       },
       {
         id: 'step-3-synthesize-guide',
-        title: '3. Synthesize a Summary Cheat-Sheet or Study Guide',
-        detail: `Drag your matched notes into The Synthesis Bin on /workspace/synthesizer to generate a retention-biased guide for "${focusTopic}".`,
-        linkLabel: 'Open Synthesizer (Study Guide / Cheat-Sheet)',
+        title: '3. Create a Study Guide or Cheat-Sheet',
+        detail: `Add your matched notes in Study Creator to build a guide for "${focusTopic}" using your own examples.`,
+        linkLabel: 'Open Study Creator',
         onFollowLink: () => onNavigate('/workspace/synthesizer'),
       },
       {
         id: 'step-4-active-recall',
-        title: '4. Test recall with Flashcards & a Practice Exam',
+        title: '4. Practice with Flashcards & a Practice Exam',
         detail:
-          'Generate an interactive Flashcard Set and Practice Exam from your own phrasing and examples, then score your recall.',
-        linkLabel: 'Launch Flashcards & Practice Exam',
+          'Generate interactive Flashcards and a Practice Exam from your notes to test what you remember.',
+        linkLabel: 'Make Flashcards & Exam',
         onFollowLink: () => onNavigate('/workspace/synthesizer'),
       },
       {
         id: 'step-5-backlinks',
-        title: '5. Verify cross-folder backlinks & problem spots',
+        title: '5. Double-check source links & weak spots',
         detail:
-          'Return to your workspace to follow read-only provenance backlinks back to source blocks and re-drill weak questions.',
-        linkLabel: 'Review Workspace & Backlinks',
+          'Follow linked sources back to the original paragraphs and review anything you missed.',
+        linkLabel: 'Review Notes',
         onFollowLink: () => onNavigate('/workspace'),
       },
     ],
@@ -289,25 +288,21 @@ export function StudyPage({
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6 px-4 py-6 lg:px-8">
       {/* Header */}
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#202430] pb-5">
+      <div className="flex flex-wrap items-end justify-between gap-4 pb-1">
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs font-medium text-[#E0A83E]">
-            <GraduationCap className="h-3.5 w-3.5" />
-            <span>On-Device Study Planner</span>
-          </div>
-          <h1 className="font-serif text-2xl font-semibold tracking-tight text-[#F5F1E8] sm:text-3xl">
+          <h1 className="font-serif text-2xl font-semibold text-[#F5F1E8] sm:text-3xl">
             Study Mode
           </h1>
-          <p className="text-xs text-[#9198A8] sm:text-sm">
-            Match your study goal against local sources and manual notes
-            on-device, then work through a linked 5-step preparation plan.
+          <p className="max-w-prose text-xs text-[#9198A8] sm:text-sm">
+            Find your most relevant readings and notes, then follow a 5-step
+            study checklist.
           </p>
         </div>
 
         <button
           type="button"
           onClick={() => onNavigate('/workspace')}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[#282D3B] bg-[#141720] px-3.5 py-2 text-xs font-medium text-[#C8CCD6] transition-colors hover:border-[#383F52] hover:text-[#ECEBE6]"
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#282D3B] bg-[#141720] px-3.5 text-xs font-medium text-[#C8CCD6] transition-colors hover:border-[#383F52] hover:text-[#ECEBE6]"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
           <span>Back to Workspace</span>
@@ -327,7 +322,9 @@ export function StudyPage({
             What are you preparing for?
           </label>
           <span className="text-[11px] text-[#7D8496]">
-            Runs locally ({searchMode === 'semantic' ? 'semantic similarity' : 'word match'}) · nothing leaves your device
+            {activePrompt
+              ? `Runs on your device (${searchMode === 'semantic' ? 'semantic similarity' : 'word match'}) · nothing leaves this computer`
+              : 'Runs on your device · nothing leaves this computer'}
           </span>
         </div>
 
@@ -358,7 +355,7 @@ export function StudyPage({
       {error && (
         <div
           role="alert"
-          className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-xs text-rose-200"
+          className="rounded-xl border border-[#5A2934] bg-[#1C1216] px-4 py-3 text-xs text-rose-200"
         >
           {error}
         </div>
@@ -371,7 +368,7 @@ export function StudyPage({
           aria-label="Matched Source Materials"
           className="space-y-3 rounded-xl border border-[#232734] bg-[#13161E] p-5"
         >
-          <div className="flex items-baseline justify-between gap-2 border-b border-[#202430] pb-3">
+          <div className="flex items-baseline justify-between gap-2 pb-1">
             <div className="flex items-center gap-2">
               <BookOpen className="h-4 w-4 text-[#E0A83E]" />
               <h2 className="font-serif text-base font-semibold text-[#F4F0E7]">
@@ -385,17 +382,14 @@ export function StudyPage({
 
           {!activePrompt ? (
             <p className="py-6 text-xs leading-relaxed text-[#7D8496]">
-              Enter a study prompt above (e.g., &ldquo;Prepare for my Calculus
-              midterm on derivatives&rdquo;) to rank reference PDFs, Markdown,
-              and text files from <code className="font-mono">sources/</code>.
+              Enter a topic above to find matching PDFs and readings from Sources.
             </p>
           ) : matchedSources.length === 0 ? (
             <p className="py-6 text-xs leading-relaxed text-[#7D8496]">
-              No source materials in <code className="font-mono">sources/</code>{' '}
-              matched &ldquo;{activePrompt}&rdquo; yet.
+              No source files matched &ldquo;{activePrompt}&rdquo;.
             </p>
           ) : (
-            <div className="divide-y divide-[#1D212D] rounded-lg border border-[#232734] bg-[#0F1117]">
+            <div className="space-y-1.5">
               {matchedSources.map((item) => (
                 <button
                   key={`${item.noteId}-${item.blockId}`}
@@ -403,11 +397,11 @@ export function StudyPage({
                   onClick={() =>
                     onNavigateToBlock(item.noteId, item.blockId, item.kind)
                   }
-                  className="group flex w-full items-start justify-between gap-3 px-4 py-3 text-left text-xs transition-colors hover:bg-[#171A24]"
+                  className="group flex w-full items-start justify-between gap-3 rounded-lg bg-[#0F1117] px-3.5 py-3 text-left text-xs transition-colors hover:bg-[#171A24]"
                 >
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                      <span className="font-mono font-semibold text-[#E0A83E] tabular-nums">
+                      <span className="font-semibold text-[#E0A83E] tabular-nums">
                         {item.percentMatch}% match
                       </span>
                       <span aria-hidden="true" className="text-[#686F80]">
@@ -444,7 +438,7 @@ export function StudyPage({
           aria-label="Suggested Manual Notes"
           className="space-y-3 rounded-xl border border-[#232734] bg-[#13161E] p-5"
         >
-          <div className="flex items-baseline justify-between gap-2 border-b border-[#202430] pb-3">
+          <div className="flex items-baseline justify-between gap-2 pb-1">
             <div className="flex items-center gap-2">
               <FileText className="h-4 w-4 text-[#E0A83E]" />
               <h2 className="font-serif text-base font-semibold text-[#F4F0E7]">
@@ -458,16 +452,15 @@ export function StudyPage({
 
           {!activePrompt ? (
             <p className="py-6 text-xs leading-relaxed text-[#7D8496]">
-              Your matching notes in <code className="font-mono">manual/</code>{' '}
-              will appear here with direct block links.
+              Matching personal notes will appear here with direct links.
             </p>
           ) : suggestedManualNotes.length === 0 ? (
             <p className="py-6 text-xs leading-relaxed text-[#7D8496]">
-              No manual notes matched &ldquo;{activePrompt}&rdquo;. Consider
-              creating a new study note in <code className="font-mono">manual/</code>.
+              No personal notes matched &ldquo;{activePrompt}&rdquo;. Try creating
+              one in My Notes.
             </p>
           ) : (
-            <div className="divide-y divide-[#1D212D] rounded-lg border border-[#232734] bg-[#0F1117]">
+            <div className="space-y-1.5">
               {suggestedManualNotes.map((item) => (
                 <button
                   key={`${item.noteId}-${item.blockId}`}
@@ -475,11 +468,11 @@ export function StudyPage({
                   onClick={() =>
                     onNavigateToBlock(item.noteId, item.blockId, item.kind)
                   }
-                  className="group flex w-full items-start justify-between gap-3 px-4 py-3 text-left text-xs transition-colors hover:bg-[#171A24]"
+                  className="group flex w-full items-start justify-between gap-3 rounded-lg bg-[#0F1117] px-3.5 py-3 text-left text-xs transition-colors hover:bg-[#171A24]"
                 >
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                      <span className="font-mono font-semibold text-[#E0A83E] tabular-nums">
+                      <span className="font-semibold text-[#E0A83E] tabular-nums">
                         {item.percentMatch}% match
                       </span>
                       <span aria-hidden="true" className="text-[#686F80]">
@@ -515,39 +508,38 @@ export function StudyPage({
         aria-label="5-Step Study Checklist"
         className="space-y-4 rounded-xl border border-[#232734] bg-[#13161E] p-5"
       >
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#202430] pb-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-1">
           <div className="space-y-0.5">
             <h2 className="font-serif text-lg font-semibold text-[#F5F1E8]">
               5-Step Study Checklist
             </h2>
             <p className="text-xs text-[#8E95A5]">
-              Interactive study workflow linked to your workspace notes,
-              sources, and Synthesizer.
+              Check off each step as you prepare.
             </p>
           </div>
 
           <div className="flex items-center gap-3 text-xs">
-            <span className="font-mono font-semibold text-[#ECEBE6] tabular-nums">
+            <span className="font-semibold text-[#ECEBE6] tabular-nums">
               {completedCount}/5 completed ({completionPct}%)
             </span>
           </div>
         </div>
 
         {/* Progress Bar */}
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#1C202B]">
+        <div className="h-1.5 w-full overflow-hidden rounded-sm bg-[#1C202B]">
           <div
-            className="h-full bg-[#E0A83E] transition-all duration-200"
+            className="h-full bg-[#E0A83E] transition-[width] duration-200"
             style={{width: `${completionPct}%`}}
           />
         </div>
 
-        <div className="divide-y divide-[#1E222E] rounded-xl border border-[#232734] bg-[#0F1117]">
+        <div className="space-y-1.5">
           {checklistSteps.map((step) => {
             const done = completedStepIds.includes(step.id);
             return (
               <div
                 key={step.id}
-                className="flex flex-wrap items-start justify-between gap-4 px-4 py-3.5 text-xs"
+                className="flex flex-wrap items-start justify-between gap-4 rounded-lg bg-[#0F1117] px-4 py-3.5 text-xs"
               >
                 <div className="flex min-w-0 flex-1 items-start gap-3">
                   <button

@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   ArrowUpRight,
   Check,
-  GitMerge,
   GripVertical,
   KeyRound,
   Lock,
@@ -85,8 +84,8 @@ interface SynthesizerPageProps {
 
 const PILLAR_LABEL: Record<Pillar, string> = {
   sources: 'Sources',
-  manual: 'Manual',
-  ai: 'AI Output',
+  manual: 'My Notes',
+  ai: 'AI Notes',
 };
 
 const DRAG_MIME = 'application/x-noodle-vault-item';
@@ -123,7 +122,7 @@ function renderTextWithClickableCitations(
         onClick={() =>
           onNavigateToBlock(target.noteId, target.blockId, target.kind)
         }
-        className="mx-0.5 inline-flex items-center rounded border border-[#E0A83E]/45 bg-[#E0A83E]/12 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-[#F4D084] transition-colors hover:bg-[#E0A83E]/25"
+        className="mx-0.5 inline-flex items-center rounded bg-[#232018] px-1.5 py-0.5 text-[11px] font-semibold text-[#F4D084] tabular-nums transition-colors hover:bg-[#322B1E]"
       >
         [{num}]
       </button>
@@ -215,7 +214,14 @@ export function SynthesizerPage({
       pillar: 'sources' as const,
       title: doc.title,
       path: doc.path,
-      subtitle: doc.kind.toUpperCase(),
+      subtitle:
+        doc.kind === 'pdf'
+          ? 'PDF'
+          : doc.kind === 'md'
+            ? 'Markdown'
+            : doc.kind === 'txt'
+              ? 'Text'
+              : 'PPTX',
       wordOrChunkLabel:
         doc.kind === 'unsupported-pptx'
           ? 'Unsupported'
@@ -306,8 +312,8 @@ export function SynthesizerPage({
     if (!getUnlockedSessionKey(provider)) {
       setError(
         currentStatus?.hasEncryptedKey
-          ? `Your ${adapter.label} key is locked in IndexedDB. Open API Key setup to unlock it with your passphrase.`
-          : `No active API key for ${adapter.label}. Open API Key setup to add one (Gemini offers a free tier).`,
+          ? `Your ${adapter.label} key is locked. Open AI Key settings to unlock it with your passphrase.`
+          : `No active API key for ${adapter.label}. Open AI Key settings to add one (Gemini offers a free tier).`,
       );
       return;
     }
@@ -399,14 +405,17 @@ export function SynthesizerPage({
         persistAiNote: onSaveAiNote,
       });
 
-      setResponse(out);
+      setResponse({
+        ...out,
+        structuredOutput: persisted.verifiedOutput,
+      });
       setSavedAiEntry(persisted.savedEntry);
       setSavedBacklinks(persisted.createdBacklinks);
       setPendingPreview(null);
     } catch (err) {
       setError(
         (err as Error).message ||
-          'Cloud synthesis failed or provider output failed validation.',
+          'Could not generate study material or the response was invalid.',
       );
       setPendingPreview(null);
     } finally {
@@ -426,26 +435,21 @@ export function SynthesizerPage({
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6 px-4 py-6 lg:px-8">
       {/* Header */}
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#202430] pb-5">
+      <div className="flex flex-wrap items-end justify-between gap-4 pb-1">
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs font-medium text-[#E0A83E]">
-            <GitMerge className="h-3.5 w-3.5" />
-            <span>Retention-Biased BYOK Synthesis</span>
-          </div>
-          <h1 className="font-serif text-2xl font-semibold tracking-tight text-[#F5F1E8] sm:text-3xl">
+          <h1 className="font-serif text-2xl font-semibold text-[#F5F1E8] sm:text-3xl">
             Synthesizer
           </h1>
-          <p className="text-xs text-[#9198A8] sm:text-sm">
-            Curate materials from My Vault into The Synthesis Bin, review the
-            sanitized excerpt privacy notice, and save validated outputs into{' '}
-            <code className="font-mono text-[#ECEBE6]">ai/</code>.
+          <p className="max-w-prose text-xs text-[#9198A8] sm:text-sm">
+            Pick notes from My Vault, preview what gets sent, and save study
+            guides, flashcards, or exams to AI Notes.
           </p>
         </div>
 
         <button
           type="button"
           onClick={() => onNavigate('/workspace')}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[#282D3B] bg-[#141720] px-3.5 py-2 text-xs font-medium text-[#C8CCD6] transition-colors hover:border-[#383F52] hover:text-[#ECEBE6]"
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#282D3B] bg-[#141720] px-3.5 text-xs font-medium text-[#C8CCD6] transition-colors hover:border-[#383F52] hover:text-[#ECEBE6]"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
           <span>Back to Workspace</span>
@@ -479,102 +483,102 @@ export function SynthesizerPage({
             ))}
           </select>
 
-          <span className="font-mono text-[11px] text-[#7D8496]">
+          <span className="text-xs text-[#7D8496]">
             {model}
           </span>
 
-          <span
-            className={`text-[11px] font-medium ${
-              hasUnlockedKey
-                ? 'text-emerald-400'
-                : currentStatus?.hasEncryptedKey
-                  ? 'text-[#E0A83E]'
-                  : 'text-[#888F9F]'
-            }`}
-          >
-            ·{' '}
-            {hasUnlockedKey
-              ? 'Key unlocked in memory'
-              : currentStatus?.hasEncryptedKey
-                ? 'Key locked (passphrase needed)'
-                : 'No key configured'}
-          </span>
-        </div>
-
-        <button
-          type="button"
-          onClick={onOpenKeySetup}
-          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#2C3140] bg-[#171A23] px-3 text-xs font-medium text-[#ECEBE6] transition-colors hover:border-[#E0A83E]/50"
-        >
-          <KeyRound className="h-3.5 w-3.5 text-[#E0A83E]" />
-          <span>
-            {hasUnlockedKey
-              ? 'Manage API Key'
-              : currentStatus?.hasEncryptedKey
-                ? 'Unlock Key'
-                : 'Setup API Key'}
-          </span>
-        </button>
-      </div>
-
-      {/* Two-Pane Synthesizer Workspace: Left = My Vault, Right = The Synthesis Bin */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:items-stretch">
-        {/* LEFT PANE: My Vault */}
-        <section
-          aria-label="My Vault"
-          className="flex flex-col rounded-xl border border-[#232734] bg-[#13161E] p-4 lg:col-span-5"
-        >
-          <div className="space-y-3 border-b border-[#202430] pb-3">
-            <div className="flex items-baseline justify-between gap-2">
-              <h2 className="font-serif text-lg font-semibold text-[#F5F1E8]">
-                My Vault
-              </h2>
-              <span className="text-[11px] text-[#7D8496] tabular-nums">
-                {filteredVault.length} items · drag or click to add
+              <span
+                className={`text-[11px] font-medium ${
+                  hasUnlockedKey
+                    ? 'text-emerald-400'
+                    : currentStatus?.hasEncryptedKey
+                      ? 'text-[#E0A83E]'
+                      : 'text-[#888F9F]'
+                }`}
+              >
+                ·{' '}
+                {hasUnlockedKey
+                  ? 'Key ready'
+                  : currentStatus?.hasEncryptedKey
+                    ? 'Key locked'
+                    : 'No key yet'}
               </span>
             </div>
 
-            <div className="relative">
-              <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-[#6E7587]" />
-              <input
-                type="search"
-                value={vaultQuery}
-                onChange={(e) => setVaultQuery(e.target.value)}
-                placeholder="Search across sources, manual, and AI notes..."
-                aria-label="Search My Vault"
-                className="h-9 w-full rounded-lg border border-[#282D3B] bg-[#0D0F14] pr-3 pl-9 text-xs text-[#ECEBE6] placeholder-[#686F80] focus:border-[#E0A83E]/60 focus:outline-none"
-              />
-            </div>
-
-            <div
-              role="tablist"
-              aria-label="Filter My Vault by pillar"
-              className="flex flex-wrap items-center gap-1 rounded-lg bg-[#0E1015] p-1 text-[11px]"
+            <button
+              type="button"
+              onClick={onOpenKeySetup}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#2C3140] bg-[#171A23] px-3 text-xs font-medium text-[#ECEBE6] transition-colors hover:border-[#E0A83E]/50"
             >
-              {(
-                [
-                  {id: 'all', label: 'All Pillars'},
-                  {id: 'sources', label: 'Sources'},
-                  {id: 'manual', label: 'Manual'},
-                  {id: 'ai', label: 'AI'},
-                ] as Array<{id: PillarFilter; label: string}>
-              ).map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={vaultPillarFilter === tab.id}
-                  onClick={() => setVaultPillarFilter(tab.id)}
-                  className={`flex-1 rounded-md px-2.5 py-1.5 font-medium whitespace-nowrap transition-colors ${
-                    vaultPillarFilter === tab.id
-                      ? 'bg-[#222736] text-[#F6DFA8]'
-                      : 'text-[#8E95A5] hover:text-[#ECEBE6]'
-                  }`}
+              <KeyRound className="h-3.5 w-3.5 text-[#E0A83E]" />
+              <span>
+                {hasUnlockedKey
+                  ? 'Manage Key'
+                  : currentStatus?.hasEncryptedKey
+                    ? 'Unlock Key'
+                    : 'Add AI Key'}
+              </span>
+            </button>
+          </div>
+
+          {/* Two-Pane Synthesizer Workspace: Left = My Vault, Right = The Synthesis Bin */}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:items-stretch">
+            {/* LEFT PANE: My Vault */}
+            <section
+              aria-label="My Vault"
+              className="flex flex-col rounded-xl border border-[#232734] bg-[#13161E] p-4 lg:col-span-5"
+            >
+              <div className="space-y-3 pb-2">
+                <div className="flex items-baseline justify-between gap-2">
+                  <h2 className="font-serif text-lg font-semibold text-[#F5F1E8]">
+                    My Vault
+                  </h2>
+                  <span className="text-[11px] text-[#7D8496] tabular-nums">
+                    {filteredVault.length} items · drag or click to add
+                  </span>
+                </div>
+
+                <div className="relative">
+                  <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-[#6E7587]" />
+                  <input
+                    type="search"
+                    value={vaultQuery}
+                    onChange={(e) => setVaultQuery(e.target.value)}
+                    placeholder="Search notes & files..."
+                    aria-label="Search My Vault"
+                    className="h-9 w-full rounded-lg border border-[#282D3B] bg-[#0D0F14] pr-3 pl-9 text-xs text-[#ECEBE6] placeholder-[#686F80] focus:border-[#E0A83E]/60 focus:outline-none"
+                  />
+                </div>
+
+                <div
+                  role="tablist"
+                  aria-label="Filter My Vault by folder"
+                  className="flex flex-wrap items-center gap-1 rounded-lg bg-[#0E1015] p-1 text-[11px]"
                 >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
+                  {(
+                    [
+                      {id: 'all', label: 'All'},
+                      {id: 'sources', label: 'Sources'},
+                      {id: 'manual', label: 'My Notes'},
+                      {id: 'ai', label: 'AI Notes'},
+                    ] as Array<{id: PillarFilter; label: string}>
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={vaultPillarFilter === tab.id}
+                      onClick={() => setVaultPillarFilter(tab.id)}
+                      className={`flex-1 rounded-md px-2.5 py-1.5 font-medium whitespace-nowrap transition-colors ${
+                        vaultPillarFilter === tab.id
+                          ? 'bg-[#222736] text-[#F6DFA8]'
+                          : 'text-[#8E95A5] hover:text-[#ECEBE6]'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
           </div>
 
           <div className="mt-3 max-h-[430px] flex-1 space-y-1.5 overflow-y-auto pr-1">
@@ -600,12 +604,12 @@ export function SynthesizerPage({
                         });
                       }
                     }}
-                    className={`flex items-center justify-between gap-2.5 rounded-lg border px-3 py-2.5 text-xs transition-colors ${
+                    className={`flex items-center justify-between gap-2.5 rounded-lg px-3 py-2.5 text-xs transition-colors ${
                       item.disabled
-                        ? 'border-[#1E222E] bg-[#0F1117]/60 opacity-50'
+                        ? 'bg-[#0F1117] opacity-50'
                         : inBin
-                          ? 'border-[#E0A83E]/45 bg-[#E0A83E]/8'
-                          : 'border-[#212532] bg-[#0F1117] hover:border-[#343B4E]'
+                          ? 'border-l-2 border-[#E0A83E] bg-[#1B1914]'
+                          : 'bg-[#0F1117] hover:bg-[#171A23]'
                     }`}
                   >
                     <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -659,10 +663,10 @@ export function SynthesizerPage({
                       aria-label={
                         inBin ? `${item.title} added` : `Add ${item.title} to bin`
                       }
-                      className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors ${
+                      className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2.5 text-[11px] font-medium transition-colors ${
                         inBin
-                          ? 'border-emerald-500/40 bg-emerald-500/12 text-emerald-300'
-                          : 'border-[#2B3040] bg-[#161923] text-[#C8CCD6] hover:border-[#E0A83E]/55 hover:text-[#F6DFA8]'
+                          ? 'bg-[#121D19] text-emerald-300'
+                          : 'bg-[#181C27] text-[#C8CCD6] hover:bg-[#212636] hover:text-[#F6DFA8]'
                       } disabled:cursor-default`}
                     >
                       {inBin ? (
@@ -696,9 +700,7 @@ export function SynthesizerPage({
                   The Synthesis Bin
                 </h2>
                 <p className="text-[11px] text-[#8E95A5]">
-                  Drop materials here or click items in My Vault. Only retrieved,
-                  sanitized excerpts (capped at {MAX_CLOUD_EXCERPT_CHARS} chars)
-                  leave your device after notice approval.
+                  Drop or click items to add them. Only short snippets leave your device after you approve.
                 </p>
               </div>
               {binItems.length > 0 && (
@@ -724,9 +726,9 @@ export function SynthesizerPage({
               }}
               onDragLeave={() => setDragOverBin(false)}
               onDrop={handleDropOnBin}
-              className={`min-h-[124px] rounded-xl border-2 border-dashed p-4 transition-colors ${
+              className={`min-h-[124px] rounded-xl border border-dashed p-4 transition-colors ${
                 dragOverBin
-                  ? 'border-[#E0A83E] bg-[#E0A83E]/10'
+                  ? 'border-[#E0A83E] bg-[#1C1A15]'
                   : 'border-[#2E3446] bg-[#0E1015]'
               }`}
             >
@@ -744,9 +746,9 @@ export function SynthesizerPage({
                   {binItems.map((item) => (
                     <span
                       key={`chip-${item.id}`}
-                      className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-[#343A4E] bg-[#161923] px-2.5 py-1.5 text-xs text-[#EFECE3]"
+                      className="inline-flex max-w-full items-center gap-1.5 rounded-lg bg-[#161923] px-2.5 py-1.5 text-xs text-[#EFECE3]"
                     >
-                      <span className="font-mono text-[10px] text-[#E0A83E]">
+                      <span className="text-[11px] font-medium text-[#E0A83E]">
                         {PILLAR_LABEL[item.pillar]}
                       </span>
                       <span className="max-w-[180px] truncate font-medium">
@@ -777,9 +779,9 @@ export function SynthesizerPage({
                       key={fmt.id}
                       type="button"
                       onClick={() => setOutputFormat(fmt.id)}
-                      className={`rounded-lg border px-3 py-2 text-left text-xs transition-colors ${
+                      className={`h-9 rounded-lg border px-3 text-left text-xs transition-colors ${
                         selected
-                          ? 'border-[#E0A83E]/70 bg-[#E0A83E]/15 font-semibold text-[#F6DFA8]'
+                          ? 'border-[#E0A83E] bg-[#1D2230] font-semibold text-[#F6DFA8]'
                           : 'border-[#252A38] bg-[#0E1015] text-[#B4B9C6] hover:border-[#3A4154] hover:text-[#ECEBE6]'
                       }`}
                     >
@@ -802,8 +804,7 @@ export function SynthesizerPage({
                 htmlFor="synth-question-input"
                 className="block text-xs font-medium text-[#C8CCD6]"
               >
-                Focus prompt (retention-biased to preserve your examples &amp;
-                metaphors)
+                What should this focus on? (keeps your own examples &amp; wording)
               </label>
               <textarea
                 id="synth-question-input"
@@ -819,9 +820,7 @@ export function SynthesizerPage({
               <p className="flex items-center gap-1.5 text-[11px] text-[#7D8496]">
                 <Lock className="h-3 w-3 text-[#E0A83E]" />
                 <span>
-                  Sanitized plain-text excerpts capped at{' '}
-                  {MAX_CLOUD_EXCERPT_CHARS} chars · saves only to{' '}
-                  <code className="font-mono">ai/</code>
+                  Plain-text snippets max {MAX_CLOUD_EXCERPT_CHARS} chars · saves to AI Notes
                 </span>
               </p>
 
@@ -833,8 +832,8 @@ export function SynthesizerPage({
                 <Sparkles className="h-3.5 w-3.5" />
                 <span>
                   {retrieving
-                    ? 'Retrieving & sanitizing...'
-                    : 'Synthesize & Review Notice'}
+                    ? 'Finding snippets...'
+                    : 'Create & Preview'}
                 </span>
               </button>
             </div>
@@ -845,14 +844,14 @@ export function SynthesizerPage({
       {error && (
         <div
           role="alert"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-xs text-rose-200"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#5A2934] bg-[#1C1216] px-4 py-3 text-xs text-rose-200"
         >
           <span>{error}</span>
           {!hasUnlockedKey && (
             <button
               type="button"
               onClick={onOpenKeySetup}
-              className="shrink-0 rounded-md border border-rose-400/40 bg-[#151820] px-3 py-1 font-medium text-rose-100 hover:bg-[#1E222E]"
+              className="h-8 shrink-0 rounded-md border border-[#5A2934] bg-[#151820] px-3 font-medium text-rose-100 hover:bg-[#1E222E]"
             >
               Open API Key Setup
             </button>
@@ -864,19 +863,19 @@ export function SynthesizerPage({
       {response && structured && (
         <section
           aria-label="Synthesized Output"
-          className="space-y-5 rounded-xl border border-violet-400/35 bg-[#141622] p-5"
+          className="space-y-5 rounded-xl border border-[#343054] bg-[#141622] p-5"
         >
-          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#232738] pb-4">
+          <div className="flex flex-wrap items-start justify-between gap-3 pb-1">
             <div className="space-y-1">
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <Sparkles className="h-4 w-4 text-violet-300" />
                 <span className="font-semibold text-violet-200">
-                  AI Output · {getSynthesisFormatLabel(structured.format)}
+                  {getSynthesisFormatLabel(structured.format)}
                 </span>
                 <span aria-hidden="true" className="text-[#6E7587]">
                   ·
                 </span>
-                <span className="font-mono text-[11px] text-[#A8B0C2]">
+                <span className="text-xs text-[#A8B0C2]">
                   {getProviderAdapter(response.provider).label} ({response.model})
                 </span>
                 {structured.preservedPhrases.length > 0 && (
@@ -894,13 +893,9 @@ export function SynthesizerPage({
               </h2>
 
               {savedAiEntry && (
-                <p className="text-[11px] text-emerald-300">
-                  Saved as TipTap JSON in{' '}
-                  <code className="font-mono">
-                    {savedAiEntry.path ?? `ai/${savedAiEntry.fileName}`}
-                  </code>{' '}
-                  with {savedBacklinks.length} read-only source block{' '}
-                  {savedBacklinks.length === 1 ? 'backlink' : 'backlinks'}.
+                <p className="text-xs text-emerald-300 tabular-nums">
+                  Saved in AI Notes with {savedBacklinks.length} source{' '}
+                  {savedBacklinks.length === 1 ? 'link' : 'links'}.
                 </p>
               )}
             </div>
@@ -921,14 +916,14 @@ export function SynthesizerPage({
                 }}
                 className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-[#E0A83E] px-3.5 text-xs font-semibold text-[#111216] transition-colors hover:bg-[#ECB955]"
               >
-                <span>Open Saved Note in ai/</span>
+                <span>Open Saved Note</span>
                 <ArrowUpRight className="h-3.5 w-3.5" />
               </button>
             )}
           </div>
 
           {structured.summary && (
-            <p className="text-sm leading-relaxed text-[#E4E1D7]">
+            <p className="max-w-prose text-sm leading-relaxed text-[#E4E1D7]">
               {renderTextWithClickableCitations(
                 structured.summary,
                 retrievedExcerpts,
@@ -938,7 +933,7 @@ export function SynthesizerPage({
           )}
 
           {structured.preservedPhrases.length > 0 && (
-            <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/8 px-3.5 py-2.5 text-xs">
+            <div className="rounded-lg bg-[#11201A] px-3.5 py-2.5 text-xs">
               <div className="mb-1">
                 <PreservedFromNotesMarker />
               </div>
@@ -992,14 +987,14 @@ export function SynthesizerPage({
 
           {/* Web Grounding Citations */}
           {response.webCitations && response.webCitations.length > 0 && (
-            <div className="space-y-3 rounded-xl border border-sky-500/35 bg-sky-500/10 p-4">
+            <div className="space-y-3 rounded-xl bg-[#101924] p-4">
               <div className="flex items-center justify-between gap-2">
-                <h3 className="font-serif text-sm font-semibold text-sky-200">
+                <h3 className="font-serif text-sm font-semibold text-sky-200 tabular-nums">
                   Web Grounding Citations ({response.webCitations.length})
                 </h3>
                 {response.droppedWebCitationsCount !== undefined &&
                   response.droppedWebCitationsCount > 0 && (
-                    <span className="text-[11px] text-sky-300">
+                    <span className="text-[11px] text-sky-300 tabular-nums">
                       ({response.droppedWebCitationsCount} non-whitelisted citations dropped)
                     </span>
                   )}
@@ -1011,7 +1006,7 @@ export function SynthesizerPage({
                 {response.webCitations.map((wc) => (
                   <div
                     key={wc.id}
-                    className="flex items-start justify-between gap-2 rounded-lg border border-sky-500/25 bg-[#0F1117] p-3 text-xs"
+                    className="flex items-start justify-between gap-2 rounded-lg bg-[#0E1016] p-3 text-xs"
                   >
                     <div className="space-y-1">
                       {isAllowedLinkUrl(wc.url) ? (
@@ -1029,7 +1024,7 @@ export function SynthesizerPage({
                           {wc.title || wc.domain}
                         </span>
                       )}
-                      <p className="font-mono text-[10px] text-[#7E8596]">
+                      <p className="text-[11px] text-[#7E8596]">
                         {wc.domain}
                       </p>
                       {wc.claim && <p className="text-[#D0D4E0]">{wc.claim}</p>}
@@ -1042,14 +1037,14 @@ export function SynthesizerPage({
 
           {/* Sections (Study Guide / Cheat-Sheet / Overview) */}
           {structured.sections.length > 0 && (
-            <div className="space-y-4">
+            <div className="space-y-3">
               {structured.sections.map((sec, idx) => (
                 <div
                   key={`${sec.heading}-${idx}`}
-                  className={`space-y-2 rounded-xl border p-4 ${
+                  className={`space-y-2 rounded-xl p-4 ${
                     sec.knowledgeGap
-                      ? 'border-amber-500/40 bg-amber-500/8'
-                      : 'border-[#232736] bg-[#0F1117]'
+                      ? 'border-l-2 border-[#E0A83E] bg-[#191610]'
+                      : 'bg-[#0F1117]'
                   }`}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1058,10 +1053,10 @@ export function SynthesizerPage({
                     </h3>
                     <div className="flex items-center gap-2">
                       {sec.knowledgeGap && (
-                        <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-200">
                           <span>No supporting notes found</span>
                           {sec.bestSimilarityScore !== undefined && (
-                            <span className="font-mono text-[10px] tabular-nums">
+                            <span className="text-[11px] text-amber-300 tabular-nums">
                               ({sec.bestSimilarityScore.toFixed(2)})
                             </span>
                           )}
@@ -1070,7 +1065,7 @@ export function SynthesizerPage({
                       {sec.preservedFromNotes && <PreservedFromNotesMarker />}
                     </div>
                   </div>
-                  <div className="text-[13.5px] leading-relaxed text-[#D8D6CE] whitespace-pre-wrap">
+                  <div className="max-w-prose text-[13.5px] leading-relaxed whitespace-pre-wrap text-[#D8D6CE]">
                     {renderTextWithClickableCitations(
                       sec.body,
                       retrievedExcerpts,
@@ -1107,12 +1102,11 @@ export function SynthesizerPage({
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
             <div className="space-y-0.5">
               <h2 className="font-serif text-base font-semibold text-[#F4F0E7]">
-                Sanitized Excerpts Ready for Privacy Notice
+                Snippets Ready for Review
               </h2>
-              <p className="text-[11px] text-[#888F9F]">
-                {retrievedExcerpts.length} blocks ranked locally ({retrievalLabel}),
-                stripped to plain text, and capped at {MAX_CLOUD_EXCERPT_CHARS}{' '}
-                chars each.
+              <p className="text-[11px] text-[#888F9F] tabular-nums">
+                {retrievedExcerpts.length} matching snippets ({retrievalLabel}),
+                plain text only, max {MAX_CLOUD_EXCERPT_CHARS} chars each.
               </p>
             </div>
 
@@ -1129,13 +1123,13 @@ export function SynthesizerPage({
                 )
               }
               disabled={sending}
-              className="rounded-lg border border-[#E0A83E]/50 bg-[#E0A83E]/12 px-3 py-1.5 text-xs font-semibold text-[#F4D084] transition-colors hover:bg-[#E0A83E]/20 disabled:opacity-50"
+              className="h-8 rounded-lg bg-[#232018] px-3 text-xs font-semibold text-[#F4D084] transition-colors hover:bg-[#322B1E] disabled:opacity-50"
             >
-              Review Privacy Notice &amp; Send
+              Review &amp; Send
             </button>
           </div>
 
-          <div className="divide-y divide-[#1D212D] rounded-lg border border-[#222634] bg-[#0F1117]">
+          <div className="space-y-1.5">
             {retrievedExcerpts.map((ex) => (
               <button
                 key={ex.chunkId}
@@ -1143,17 +1137,17 @@ export function SynthesizerPage({
                 onClick={() =>
                   onNavigateToBlock(ex.noteId, ex.blockId, ex.kind)
                 }
-                className="group flex w-full items-start justify-between gap-4 px-3.5 py-3 text-left text-xs transition-colors hover:bg-[#171A24]"
+                className="group flex w-full items-start justify-between gap-4 rounded-lg bg-[#0F1117] px-3.5 py-3 text-left text-xs transition-colors hover:bg-[#171A24]"
               >
                 <div className="min-w-0 flex-1 space-y-1">
                   <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#8990A2]">
-                    <span className="font-mono font-semibold text-[#E0A83E] tabular-nums">
+                    <span className="font-semibold text-[#E0A83E] tabular-nums">
                       [{ex.citationNumber}] {ex.score.toFixed(2)} {ex.scoreLabel}
                     </span>
                     <span aria-hidden="true">·</span>
                     <span>{PILLAR_LABEL[ex.pillar]}</span>
                     <span aria-hidden="true">·</span>
-                    <span className="font-mono text-[10px] text-[#767D8F] tabular-nums">
+                    <span className="text-[11px] text-[#767D8F] tabular-nums">
                       {ex.text.length}/{MAX_CLOUD_EXCERPT_CHARS} chars
                       {ex.hadMarkupStripped ? ' · sanitized' : ''}
                       {ex.wasTruncated ? ' · capped' : ''}

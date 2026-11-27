@@ -58,7 +58,9 @@ export function TopBar({
       ? folderName
       : needsReconnect && folderName
         ? `Reconnect: ${folderName}`
-        : 'Demo Workspace (In-Memory)';
+        : folderName?.endsWith('(Read-Only)')
+          ? folderName
+          : 'Demo Notes (Temporary)';
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-[#232733] bg-[#12141A] px-4 lg:px-6">
@@ -78,10 +80,10 @@ export function TopBar({
             type="button"
             onClick={onReconnect}
             title="Reconnect workspace folder"
-            className="flex min-w-0 items-center gap-2 rounded-md border border-[#E0A83E]/50 bg-[#E0A83E]/12 px-2.5 py-1.5 text-xs text-[#F4D084] transition-colors hover:bg-[#E0A83E]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60"
+            className="flex h-9 min-w-0 items-center gap-2 rounded-lg border border-[#E0A83E] bg-[#1C202B] px-3 text-xs font-medium text-[#F4D084] transition-colors duration-150 hover:bg-[#232836] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]"
           >
             <RefreshCw className="h-3.5 w-3.5 shrink-0 text-[#E0A83E]" />
-            <span className="max-w-[160px] truncate font-mono text-[11px] sm:max-w-[240px]">
+            <span className="max-w-[160px] truncate sm:max-w-[240px]">
               {displayLabel}
             </span>
           </button>
@@ -90,10 +92,10 @@ export function TopBar({
             type="button"
             onClick={() => onNavigate('/')}
             title="Workspace setup & folder selection"
-            className="flex min-w-0 items-center gap-2 rounded-md border border-[#252936] bg-[#171A22] px-2.5 py-1.5 text-xs text-[#C8CCD6] transition-colors hover:border-[#363B4D] hover:text-[#F5F2EB] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60"
+            className="flex h-9 min-w-0 items-center gap-2 rounded-lg border border-[#252936] bg-[#171A22] px-3 text-xs font-medium text-[#C8CCD6] transition-colors duration-150 hover:border-[#363B4D] hover:text-[#F5F2EB] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]"
           >
             <Folder className="h-3.5 w-3.5 shrink-0 text-[#E0A83E]" />
-            <span className="max-w-[160px] truncate font-mono text-[11px] sm:max-w-[240px]">
+            <span className="max-w-[160px] truncate sm:max-w-[240px]">
               {displayLabel}
             </span>
           </button>
@@ -106,7 +108,7 @@ export function TopBar({
             disabled={scanning}
             title="Rescan workspace folder for changes"
             aria-label="Rescan workspace folder"
-            className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[#252936] bg-[#171A22] px-2.5 text-xs font-medium whitespace-nowrap text-[#B8BDC9] transition-colors hover:border-[#363B4D] hover:text-[#ECEBE6] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60"
+            className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-[#252936] bg-[#171A22] px-2.5 text-xs font-medium whitespace-nowrap text-[#B8BDC9] transition-colors duration-150 hover:border-[#363B4D] hover:text-[#ECEBE6] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]"
           >
             <RefreshCw
               className={`h-3.5 w-3.5 text-[#E0A83E] ${scanning ? 'animate-spin' : ''}`}
@@ -127,7 +129,7 @@ export function TopBar({
           onChange={(e) => onSearchChange(e.target.value)}
           placeholder="Filter notes by title..."
           aria-label="Filter notes by title"
-          className="h-9 w-full rounded-lg border border-[#252936] bg-[#0E1015] pr-8 pl-9 text-xs text-[#ECEBE6] placeholder-[#686F80] transition-colors focus:border-[#E0A83E]/60 focus:outline-none"
+          className="h-9 w-full rounded-lg border border-[#252936] bg-[#0E1015] pr-8 pl-9 text-xs text-[#ECEBE6] placeholder-[#686F80] transition-colors focus:border-[#E0A83E] focus:outline-none"
         />
         {searchQuery && (
           <button
@@ -148,9 +150,9 @@ export function TopBar({
           onClick={onToggleAi}
           aria-pressed={aiEnabled}
           title={aiEnabled ? 'Local AI enabled' : 'Local AI paused'}
-          className={`flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60 ${
+          className={`flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E] ${
             aiEnabled
-              ? 'border-[#E0A83E]/40 bg-[#E0A83E]/12 text-[#F0C875]'
+              ? 'border-[#E0A83E] bg-[#1D212D] text-[#F0C875]'
               : 'border-[#252936] bg-[#171A22] text-[#8E95A5] hover:text-[#ECEBE6]'
           }`}
         >
@@ -165,9 +167,9 @@ export function TopBar({
           onClick={onToggleMiniNotebook}
           aria-pressed={miniNotebookOpen}
           title="Toggle Mini-Notebook"
-          className={`flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60 ${
+          className={`flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E] ${
             miniNotebookOpen
-              ? 'border-[#E0A83E]/40 bg-[#E0A83E]/12 text-[#F0C875]'
+              ? 'border-[#E0A83E] bg-[#1D212D] text-[#F0C875]'
               : 'border-[#252936] bg-[#171A22] text-[#B8BDC9] hover:border-[#353B4C] hover:text-[#ECEBE6]'
           }`}
         >
@@ -181,9 +183,9 @@ export function TopBar({
             onClick={onToggleAiChat}
             aria-pressed={aiChatOpen}
             title="Toggle AI Note Chat Panel"
-            className={`flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60 ${
+            className={`flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E] ${
               aiChatOpen
-                ? 'border-[#E0A83E]/40 bg-[#E0A83E]/12 text-[#F0C875]'
+                ? 'border-[#E0A83E] bg-[#1D212D] text-[#F0C875]'
                 : 'border-[#252936] bg-[#171A22] text-[#B8BDC9] hover:border-[#353B4C] hover:text-[#ECEBE6]'
             }`}
           >
@@ -195,17 +197,17 @@ export function TopBar({
         <button
           type="button"
           onClick={onOpenKeySetup}
-          title="Configure BYOK API Key"
-          className="flex h-9 items-center gap-1.5 rounded-lg border border-[#252936] bg-[#171A22] px-2.5 text-xs font-medium text-[#B8BDC9] whitespace-nowrap shrink-0 transition-colors hover:border-[#353B4C] hover:text-[#ECEBE6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60"
+          title="Cloud AI Key Settings"
+          className="flex h-9 items-center gap-1.5 rounded-lg border border-[#252936] bg-[#171A22] px-2.5 text-xs font-medium text-[#B8BDC9] whitespace-nowrap shrink-0 transition-colors duration-150 hover:border-[#353B4C] hover:text-[#ECEBE6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]"
         >
           <KeyRound className="h-3.5 w-3.5 text-[#E0A83E]" />
-          <span className="hidden xl:inline">API Key</span>
+          <span className="hidden xl:inline">Cloud AI Key</span>
         </button>
 
         <button
           type="button"
           onClick={onOpenNewNote}
-          className="flex h-9 items-center gap-1.5 rounded-lg bg-[#E0A83E] px-3.5 text-xs font-semibold text-[#111216] whitespace-nowrap shrink-0 transition-colors hover:bg-[#ECB955] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]"
+          className="flex h-9 items-center gap-1.5 rounded-lg bg-[#E0A83E] px-3.5 text-xs font-semibold text-[#111216] whitespace-nowrap shrink-0 transition-colors duration-150 hover:bg-[#ECB955] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]"
         >
           <Plus className="h-3.5 w-3.5 stroke-[2.5]" />
           <span>Add New Note</span>

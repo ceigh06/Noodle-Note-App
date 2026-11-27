@@ -4,19 +4,16 @@ import {
   Bookmark,
   Bot,
   Check,
-  ChevronDown,
   FolderDown,
-  KeyRound,
   Lock,
-  MessageSquare,
   RefreshCw,
   Send,
-  ShieldAlert,
   Sparkles,
   Trash2,
   X,
 } from 'lucide-react';
 import {
+  cancelChatPreview,
   ChatMessage,
   executeApprovedChatQuery,
   extractRelevantNoteExcerpts,
@@ -117,6 +114,20 @@ export function AiChatPanel({
     return unsubscribe;
   }, []);
 
+  const activeNoteId = activeNote?.note.id ?? null;
+  const latestPreviewRef = useRef<CloudSynthesisRequestPreview | null>(null);
+  latestPreviewRef.current = privacyPreview;
+
+  // Cancel unconfirmed privacy previews and clear transient banners when switching notes or closing
+  useEffect(() => {
+    if (latestPreviewRef.current) {
+      cancelChatPreview(latestPreviewRef.current.requestId);
+      setPrivacyPreview(null);
+    }
+    setChatError(null);
+    setSaveSuccessMsg(null);
+  }, [activeNoteId, isOpen]);
+
   // Scroll to bottom on new message
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({behavior: 'smooth'});
@@ -207,6 +218,9 @@ export function AiChatPanel({
   };
 
   const handleCancelPrivacyNotice = () => {
+    if (privacyPreview) {
+      cancelChatPreview(privacyPreview.requestId);
+    }
     setPrivacyPreview(null);
   };
 
@@ -311,7 +325,7 @@ export function AiChatPanel({
                     onNavigateToBlock?.(activeNote.note.id, blockId, 'note')
                   }
                   title={`Jump to block "${blockId}" in active note`}
-                  className="mx-0.5 inline-flex items-center gap-1 rounded bg-[#E0A83E]/20 px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#F3CA77] transition-colors hover:bg-[#E0A83E]/30 focus:outline-none focus:ring-1 focus:ring-[#E0A83E]"
+                  className="mx-0.5 inline-flex items-center gap-1 rounded bg-[#232018] px-1.5 py-0.5 text-[11px] font-medium text-[#F3CA77] transition-colors hover:bg-[#322B1E] focus:outline-none focus:ring-1 focus:ring-[#E0A83E]"
                 >
                   <Bookmark className="h-3 w-3 shrink-0" />
                   <span>{blockId}</span>
@@ -323,7 +337,7 @@ export function AiChatPanel({
         </p>
 
         {citedBlockIds && citedBlockIds.length > 0 && (
-          <div className="mt-2.5 flex flex-wrap items-center gap-1.5 border-t border-[#232734] pt-2 text-[11px] text-[#8E95A5]">
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5 pt-1 text-[11px] text-[#8E95A5]">
             <span className="font-medium text-[#B2B8C6]">Cited Blocks:</span>
             {citedBlockIds.map((bid) => (
               <button
@@ -334,7 +348,7 @@ export function AiChatPanel({
                   onNavigateToBlock?.(activeNote.note.id, bid, 'note')
                 }
                 title={`Jump to block "${bid}" in active note`}
-                className="inline-flex items-center gap-1 rounded border border-[#E0A83E]/30 bg-[#E0A83E]/10 px-1.5 py-0.5 font-mono text-[10px] text-[#F3CA77] transition-colors hover:bg-[#E0A83E]/20"
+                className="inline-flex items-center gap-1 rounded bg-[#232018] px-1.5 py-0.5 text-[11px] text-[#F3CA77] transition-colors hover:bg-[#322B1E]"
               >
                 <span>{bid}</span>
               </button>
@@ -354,17 +368,15 @@ export function AiChatPanel({
         className="relative flex h-full w-80 md:w-96 flex-col border-l border-[#232733] bg-[#12141A] text-[#ECEBE6] shadow-xl shrink-0"
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-[#232733] px-4 py-3 bg-[#151821]">
+        <div className="flex items-center justify-between border-b border-[#232733] bg-[#151821] px-4 py-3">
           <div className="flex items-center gap-2">
-            <div className="rounded-lg bg-[#E0A83E]/15 p-1.5 text-[#E0A83E]">
-              <Sparkles className="h-4 w-4" />
-            </div>
+            <Sparkles className="h-4 w-4 text-[#E0A83E]" />
             <div>
-              <h2 className="text-xs font-semibold tracking-wide uppercase text-[#ECEBE6]">
+              <h2 className="font-serif text-sm font-semibold text-[#F4F0E7]">
                 Note Assistant
               </h2>
-              <p className="text-[10px] text-[#8E95A5]">
-                Answers grounded in active note
+              <p className="text-[11px] text-[#8E95A5]">
+                Answers based on this note
               </p>
             </div>
           </div>
@@ -374,8 +386,8 @@ export function AiChatPanel({
               <button
                 type="button"
                 onClick={handleClearHistory}
-                title="Clear chat history (in-memory)"
-                className="rounded p-1 text-[#8E95A5] hover:bg-[#202430] hover:text-[#ECEBE6] transition-colors"
+                title="Clear chat history"
+                className="rounded p-1.5 text-[#8E95A5] transition-colors hover:bg-[#202430] hover:text-[#ECEBE6]"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
@@ -384,63 +396,50 @@ export function AiChatPanel({
               type="button"
               onClick={onClose}
               aria-label="Close AI Chat Panel"
-              className="rounded p-1 text-[#8E95A5] hover:bg-[#202430] hover:text-[#ECEBE6] transition-colors"
+              className="rounded p-1.5 text-[#8E95A5] transition-colors hover:bg-[#202430] hover:text-[#ECEBE6]"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
         </div>
 
-        {/* Active Note Banner */}
-        <div className="border-b border-[#232733] bg-[#0E1015] px-4 py-2.5 text-xs">
+        {/* Active Note & Privacy Summary */}
+        <div className="space-y-2 border-b border-[#232733] bg-[#0E1015] px-4 py-3 text-xs">
           {activeNote ? (
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5 text-[11px] text-[#8E95A5]">
-                  <span className="font-medium text-[#E0A83E]">Active Note</span>
-                  <span>·</span>
-                  <span className="rounded bg-[#202430] px-1 py-0.2 font-mono text-[10px] text-[#B0B7C6]">
-                    {activeNote.pillar}
-                  </span>
-                </div>
-                <p className="mt-0.5 truncate font-serif text-xs font-medium text-[#F4F1EA]">
-                  {activeNote.note.title}
-                </p>
-                <p className="text-[10px] text-[#6E7587]">
-                  {activeNoteBlockCount} blocks ready · Excerpts filtered per
-                  query
-                </p>
+            <div className="min-w-0 space-y-0.5">
+              <div className="flex items-center justify-between gap-2 text-[11px] text-[#8E95A5]">
+                <span>
+                  {activeNote.pillar === 'manual' ? 'My Notes' : activeNote.pillar === 'sources' ? 'Sources' : 'AI Notes'}
+                </span>
+                <span className="tabular-nums">{activeNoteBlockCount} sections</span>
               </div>
+              <p className="truncate font-serif text-xs font-medium text-[#F4F1EA]">
+                {activeNote.note.title}
+              </p>
             </div>
           ) : (
-            <div className="flex items-center gap-2 text-amber-300/80">
+            <div className="flex items-center gap-2 text-amber-300">
               <AlertCircle className="h-3.5 w-3.5 shrink-0" />
               <span className="text-[11px]">
-                No note open. Open a note to ask questions about it.
+                Open a note to ask questions about it.
               </span>
             </div>
           )}
-        </div>
 
-        {/* API Key / Privacy Status Strip */}
-        <div className="flex items-center justify-between border-b border-[#1E222D] bg-[#141720] px-4 py-2 text-[11px]">
-          <div className="flex items-center gap-1.5">
-            <Lock className="h-3 w-3 text-[#E0A83E]" />
-            <span className="text-[#8E95A5]">
-              {hasSessionKey ? (
-                <span className="text-emerald-400 font-medium">Key Active</span>
-              ) : (
-                <span className="text-amber-400 font-medium">Key Needed</span>
-              )}
+          <div className="flex items-center justify-between pt-0.5 text-[11px]">
+            <span className="inline-flex items-center gap-1.5 text-[#8E95A5]">
+              <Lock className="h-3 w-3 text-[#E0A83E]" />
+              <span className={hasSessionKey ? 'font-medium text-emerald-400' : 'font-medium text-amber-400'}>
+                {hasSessionKey ? 'Key Active' : 'Key Needed'}
+              </span>
+              <span>· Asks before every send</span>
             </span>
-          </div>
 
-          <div className="flex items-center gap-2">
             {!hasSessionKey ? (
               <button
                 type="button"
                 onClick={() => setShowKeyForm((prev) => !prev)}
-                className="text-[10px] text-[#E0A83E] hover:underline"
+                className="text-[11px] font-medium text-[#E0A83E] hover:underline"
               >
                 {showKeyForm ? 'Hide Key Input' : 'Enter API Key'}
               </button>
@@ -448,7 +447,7 @@ export function AiChatPanel({
               <button
                 type="button"
                 onClick={onOpenKeySetup}
-                className="text-[10px] text-[#8E95A5] hover:text-[#ECEBE6]"
+                className="text-[11px] text-[#8E95A5] hover:text-[#ECEBE6]"
               >
                 Manage Key
               </button>
@@ -472,8 +471,7 @@ export function AiChatPanel({
               </button>
             </div>
             <p className="text-[11px] text-[#8E95A5] mb-2 leading-tight">
-              Stored only in browser session memory. Requests execute directly
-              from your browser.
+              Kept for this session only. Requests go straight from your browser.
             </p>
             <form onSubmit={handleSaveInlineKey} className="space-y-2">
               <input
@@ -495,30 +493,23 @@ export function AiChatPanel({
                   disabled={inlineKeySaving}
                   className="rounded bg-[#E0A83E] px-2.5 py-1 text-[11px] font-semibold text-[#111216] hover:bg-[#ECB955] disabled:opacity-50"
                 >
-                  {inlineKeySaving ? 'Saving...' : 'Set for Session'}
+                  {inlineKeySaving ? 'Saving...' : 'Use for Session'}
                 </button>
               </div>
             </form>
           </div>
         )}
 
-        {/* Diagnostic Privacy Indicator */}
-        <div className="bg-[#101218] px-4 py-1.5 text-[10px] text-[#787F91] border-b border-[#1E222D] flex items-center justify-between">
-          <span>Privacy Notice required before every send</span>
-          <span className="text-emerald-400">Excerpts only</span>
-        </div>
-
         {/* Message Thread Area */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 space-y-4 overflow-y-auto p-4">
           {messages.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center text-center text-[#6E7587] p-4">
-              <Bot className="h-8 w-8 mb-2 text-[#464C5E]" />
+            <div className="flex h-full flex-col items-center justify-center p-4 text-center text-[#6E7587]">
+              <Bot className="mb-2 h-8 w-8 text-[#464C5E]" />
               <p className="text-xs font-medium text-[#9CA2B2]">
-                Ask questions about this note
+                Ask about this note
               </p>
-              <p className="mt-1 text-[11px] text-[#6E7587] max-w-[220px]">
-                Only relevant excerpts will be retrieved and shown in a privacy
-                confirmation before sending.
+              <p className="mt-1 max-w-[220px] text-[11px] text-[#6E7587]">
+                Sends only relevant snippets after you approve.
               </p>
             </div>
           ) : (
@@ -529,17 +520,17 @@ export function AiChatPanel({
                   msg.role === 'user' ? 'items-end' : 'items-start'
                 }`}
               >
-                <div className="flex items-center gap-1.5 mb-1 text-[10px] text-[#6E7587]">
+                <div className="mb-1 flex items-center gap-1.5 text-[10px] text-[#6E7587]">
                   <span>{msg.role === 'user' ? 'You' : 'Assistant'}</span>
                   <span>·</span>
                   <span>{msg.timestamp}</span>
                 </div>
 
                 <div
-                  className={`max-w-[90%] rounded-xl px-3.5 py-2.5 text-xs shadow-sm ${
+                  className={`max-w-[90%] rounded-xl px-3.5 py-2.5 text-xs ${
                     msg.role === 'user'
                       ? 'bg-[#E0A83E] font-medium text-[#111216]'
-                      : 'border border-[#232734] bg-[#161922] text-[#ECEBE6]'
+                      : 'bg-[#161922] text-[#ECEBE6]'
                   }`}
                 >
                   {msg.role === 'user' ? (
@@ -553,7 +544,7 @@ export function AiChatPanel({
           )}
 
           {sending && (
-            <div className="flex items-center gap-2 rounded-lg border border-[#232734] bg-[#161922] p-3 text-xs text-[#9CA2B2]">
+            <div className="flex items-center gap-2 rounded-lg bg-[#161922] p-3 text-xs text-[#9CA2B2]">
               <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#E0A83E]" />
               <span>Analyzing relevant note excerpts...</span>
             </div>
@@ -564,23 +555,23 @@ export function AiChatPanel({
 
         {/* Feedback / Error banner */}
         {chatError && (
-          <div className="mx-4 mb-2 flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-2 text-xs text-rose-300">
-            <AlertCircle className="h-4 w-4 shrink-0 text-rose-400 mt-0.5" />
+          <div className="mx-4 mb-2 flex items-start gap-2 rounded-lg bg-[#201318] p-2.5 text-xs text-rose-300">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
             <p className="flex-1">{chatError}</p>
           </div>
         )}
 
         {saveSuccessMsg && (
-          <div className="mx-4 mb-2 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2 text-xs text-emerald-300">
+          <div className="mx-4 mb-2 flex items-center gap-2 rounded-lg bg-[#11201A] p-2.5 text-xs text-emerald-300">
             <Check className="h-4 w-4 shrink-0 text-emerald-400" />
             <p className="flex-1">{saveSuccessMsg}</p>
           </div>
         )}
 
-        {/* Save to ai/ Action Bar */}
+        {/* Save to AI Notes Action Bar */}
         {messages.length > 0 && onSaveToAi && (
           <div className="flex items-center justify-between border-t border-[#232734] bg-[#13151D] px-4 py-2 text-xs">
-            <span className="text-[11px] text-[#7A8194]">In-memory chat</span>
+            <span className="text-[11px] text-[#7A8194]">Not saved yet</span>
             <button
               type="button"
               onClick={handleSaveToAi}
@@ -588,7 +579,7 @@ export function AiChatPanel({
               className="inline-flex items-center gap-1.5 rounded bg-[#202532] px-2.5 py-1 text-[11px] font-medium text-[#E0A83E] hover:bg-[#282E3E] transition-colors disabled:opacity-50"
             >
               <FolderDown className="h-3.5 w-3.5" />
-              <span>{savingToAi ? 'Saving...' : 'Save to ai/'}</span>
+              <span>{savingToAi ? 'Saving...' : 'Save to AI Notes'}</span>
             </button>
           </div>
         )}

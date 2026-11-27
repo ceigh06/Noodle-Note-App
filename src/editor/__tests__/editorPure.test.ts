@@ -48,9 +48,25 @@ import {
   scoreWordMatch,
 } from '../../search/chunker';
 import {
+  addSubfolderToCategory,
+  addTopCategory,
+  deleteSubfolderInCategory,
+  deleteTopCategory,
+  getCategoryStyle,
+  getDefaultCategoryConfigs,
+  mergeDiscoveredNoteCategories,
+  renameSubfolderInCategory,
+  renameTopCategory,
+  updateTopCategoryColor,
+} from '../../storage/categoryConfig';
+import {
   OwnWriteExpectation,
   reconcileWorkspaceSnapshot,
 } from '../../storage/changeDetector';
+import {
+  parseWorkspaceRelativeNoteTarget,
+  summarizeWorkspaceFolderEntries,
+} from '../../storage/workspaceStorage';
 import {
   CloudRetrievedExcerpt,
   ScanProblem,
@@ -78,6 +94,7 @@ import {
   getTrackedAudioContextCount,
   getTrackedStreamCount,
   killAllMicrophoneAccess,
+  prepareAudioForWhisper,
   registerAudioContext,
   registerMicrophoneStream,
   registerMicrophoneTeardownHook,
@@ -85,6 +102,7 @@ import {
   zeroOutChunks,
 } from '../../voice/microphoneController';
 import {startPorcupineWakeWord} from '../../voice/porcupineWakeWord';
+import {cleanWhisperTranscript} from '../../voice/transcriptCleaner';
 import {
   getDefaultVoiceSearchSettings,
   matchesPushToTalkHotkey,
@@ -1623,6 +1641,333 @@ test('Porcupine wake word rejects missing AccessKey and voice diagnostics pass',
     `Voice diagnostics failed: ${JSON.stringify(diag)}`,
   );
 });
+
+test('parseWorkspaceRelativeNoteTarget supports nested subfolders and rejects unsafe/immutable paths', () => {
+  const nestedManual = parseWorkspaceRelativeNoteTarget(
+    'manual\\Calculus\\Week 1\\derivatives.json',
+  );
+  assert.deepEqual(nestedManual, {
+    toPillar: 'manual',
+    targetRelPath: 'Calculus/Week 1/derivatives.json',
+    subdirs: ['Calculus', 'Week 1'],
+    leafFileName: 'derivatives.json',
+  });
+
+  const aiTarget = parseWorkspaceRelativeNoteTarget('ai/guides/midterm.json');
+  assert.deepEqual(aiTarget, {
+    toPillar: 'ai',
+    targetRelPath: 'guides/midterm.json',
+    subdirs: ['guides'],
+    leafFileName: 'midterm.json',
+  });
+
+  assert.throws(() => parseWorkspaceRelativeNoteTarget('/manual/a.json'));
+  assert.throws(() => parseWorkspaceRelativeNoteTarget('manual/../ai/a.json'));
+  assert.throws(() => parseWorkspaceRelativeNoteTarget('manual/a.txt'));
+  assert.throws(() =>
+    parseWorkspaceRelativeNoteTarget('sources/Calculus/a.json'),
+  );
+});
+
+test('buildTipTapDocFromSynthesis includes validated Web Sources links and Knowledge Gap markers', () => {
+  assert.equal(isAllowedLinkUrl('https://ocw.mit.edu/calculus'), true);
+  assert.equal(isAllowedLinkUrl('javascript:alert(1)'), false);
+
+  const excerpts: CloudRetrievedExcerpt[] = [
+    {
+      citationNumber: 1,
+      chunkId: 'c1',
+      noteId: 'n1',
+      blockId: 'b1',
+      kind: 'note',
+      pillar: 'manual',
+      sourceTitle: 'Calc Lecture 1',
+      sourcePath: 'manual/calc1.json',
+      headingPath: ['Derivatives'],
+      text: 'slope of tangent',
+      score: 0.9,
+      scoreLabel: 'semantic similarity',
+      hadMarkupStripped: false,
+      wasTruncated: false,
+    },
+  ];
+
+  const output = parseAndValidateSynthesisOutput(
+    JSON.stringify({
+      format: 'study-guide',
+      title: 'Derivatives Review',
+      summary: 'Core rules.',
+      preservedPhrases: ['slope of tangent'],
+      sections: [
+        {
+          heading: 'Power Rule',
+          body: '[No supporting notes found] Differentiate x^n as n*x^(n-1).',
+          preservedFromNotes: true,
+          citations: [1],
+        },
+      ],
+    }),
+    'study-guide',
+    excerpts,
+  );
+
+  const built = buildTipTapDocFromSynthesis({
+    output,
+    excerpts,
+    provider: 'gemini',
+    providerLabel: 'Google Gemini',
+    model: 'gemini-2.5-flash',
+    question: 'Review derivatives',
+    generatedAt: '2026-11-23T12:00:00.000Z',
+    webCitations: [
+      {
+        id: 'wc-1',
+        title: 'MIT OpenCourseWare',
+        url: 'https://ocw.mit.edu/calculus',
+        domain: 'ocw.mit.edu',
+        claim: 'Derivative definition',
+      },
+      {
+        id: 'wc-2',
+        title: 'Unsafe Link',
+        url: 'javascript:alert(1)',
+        domain: 'evil.example',
+      },
+    ],
+    webGroundingNotice: 'Filtered to allowed domains.',
+  });
+
+  const plain = extractPlainText(built.doc).text;
+  assert.ok(plain.includes('[No supporting notes found]'));
+  assert.ok(plain.includes('Sources Used'));
+  assert.ok(plain.includes('Web Sources'));
+  assert.ok(plain.includes('MIT OpenCourseWare (ocw.mit.edu)'));
+
+  const serialized = JSON.stringify(built.doc);
+  assert.ok(serialized.includes('https://ocw.mit.edu/calculus'));
+  assert.equal(serialized.includes('javascript:alert(1)'), false);
+});
+
+test('summarizeWorkspaceFolderEntries recognizes clean lazy workspaces and flags code/dependency folders', () => {
+  const emptyNotesDir = summarizeWorkspaceFolderEntries('Noodle Notes', [], false);
+  assert.equal(emptyNotesDir.isEmpty, true);
+  assert.equal(emptyNotesDir.hasKnownNoodleWorkspace, false);
+  assert.equal(emptyNotesDir.looksLikeCodeProject, false);
+
+  const lazySinglePillar = summarizeWorkspaceFolderEntries(
+    'Noodle Notes',
+    ['manual'],
+    false,
+  );
+  assert.equal(lazySinglePillar.isEmpty, false);
+  assert.equal(lazySinglePillar.hasKnownNoodleWorkspace, true);
+  assert.equal(lazySinglePillar.looksLikeCodeProject, false);
+
+  const codeProjectDir = summarizeWorkspaceFolderEntries(
+    'noodle-app',
+    ['node_modules', 'package.json', 'src', 'sources'],
+    false,
+  );
+  assert.equal(codeProjectDir.looksLikeCodeProject, true);
+  assert.deepEqual(codeProjectDir.projectMarkerNames, [
+    'node_modules',
+    'package.json',
+  ]);
+  assert.equal(codeProjectDir.hasKnownNoodleWorkspace, false);
+  assert.equal(codeProjectDir.looksLikeDirectManualSubfolder, false);
+
+  const directManualDir = summarizeWorkspaceFolderEntries(
+    'manual',
+    ['testing-42f6672f.json', 'Acads'],
+    false,
+    {directManualNotesCount: 1, rootMarkdownOrTextCount: 0},
+  );
+  assert.equal(directManualDir.looksLikeDirectManualSubfolder, true);
+  assert.equal(directManualDir.directManualNotesCount, 1);
+
+  const rootNotesDir = summarizeWorkspaceFolderEntries(
+    'Study Notes',
+    ['note-a.json', 'readings.md'],
+    false,
+    {directManualNotesCount: 1, rootMarkdownOrTextCount: 1},
+  );
+  assert.equal(rootNotesDir.looksLikeDirectManualSubfolder, true);
+  assert.equal(rootNotesDir.rootMarkdownOrTextCount, 1);
+});
+
+test('categoryConfig supports custom top-level categories, colors, and nested subfolders', () => {
+  let configs = getDefaultCategoryConfigs();
+  assert.ok(configs.some((c) => c.name === 'Work'));
+  assert.ok(configs.some((c) => c.name === 'Study'));
+
+  const added = addTopCategory(configs, '  Research / Lab  ', 'violet');
+  assert.equal(added.error, undefined);
+  assert.ok(added.created);
+  assert.equal(added.created?.name, 'Research Lab');
+  configs = added.configs;
+
+  const dup = addTopCategory(configs, 'research lab');
+  assert.ok(dup.error);
+
+  const researchId = added.created!.id;
+  configs = updateTopCategoryColor(configs, researchId, 'emerald');
+  assert.equal(
+    getCategoryStyle('Research Lab', configs).dot,
+    getCategoryStyle('Projects', configs).dot,
+  );
+  assert.ok(getCategoryStyle('Unknown Custom Category', configs).dot);
+
+  const sub1 = addSubfolderToCategory(configs, researchId, 'Cell Biology');
+  assert.equal(sub1.error, undefined);
+  assert.equal(sub1.addedName, 'Cell Biology');
+  configs = sub1.configs;
+
+  const subDup = addSubfolderToCategory(configs, researchId, 'cell biology');
+  assert.ok(subDup.error);
+
+  const renamedSub = renameSubfolderInCategory(
+    configs,
+    researchId,
+    'Cell Biology',
+    'Genetics',
+  );
+  assert.equal(renamedSub.error, undefined);
+  assert.equal(renamedSub.newName, 'Genetics');
+  configs = renamedSub.configs;
+  assert.deepEqual(
+    configs.find((c) => c.id === researchId)?.subfolders,
+    ['Genetics'],
+  );
+
+  const renamedTop = renameTopCategory(configs, researchId, 'Biology');
+  assert.equal(renamedTop.oldName, 'Research Lab');
+  assert.equal(renamedTop.newName, 'Biology');
+  configs = renamedTop.configs;
+
+  configs = mergeDiscoveredNoteCategories(configs, [
+    {category: 'Biology', subfolder: 'Neuroscience'},
+    {category: 'Music', subfolder: 'Jazz'},
+  ]);
+  assert.deepEqual(
+    configs.find((c) => c.name === 'Biology')?.subfolders,
+    ['Genetics', 'Neuroscience'],
+  );
+  assert.deepEqual(
+    configs.find((c) => c.name === 'Music')?.subfolders,
+    ['Jazz'],
+  );
+
+  const deletedSub = deleteSubfolderInCategory(configs, researchId, 'Genetics');
+  configs = deletedSub.configs;
+  assert.deepEqual(
+    configs.find((c) => c.id === researchId)?.subfolders,
+    ['Neuroscience'],
+  );
+
+  const deletedTop = deleteTopCategory(configs, researchId);
+  assert.equal(deletedTop.deletedName, 'Biology');
+  assert.ok(deletedTop.fallbackName);
+  assert.equal(
+    deletedTop.configs.some((c) => c.id === researchId),
+    false,
+  );
+});
+
+test('migrateNote preserves custom categories and optional subfolders while sanitizing unsafe chars', () => {
+  const {note} = migrateNote({
+    id: 'note-custom-1',
+    title: 'Lab Notes',
+    category: '  Biology / Honors  ',
+    subfolder: 'Week 3\\Lab  ',
+    pillar: 'manual',
+    content: {type: 'doc', content: [{type: 'paragraph', content: []}]},
+  });
+
+  assert.equal(note.category, 'Biology Honors');
+  assert.equal(note.subfolder, 'Week 3 Lab');
+});
+
+test('resampleTo16kMono attenuates ultrasonic alias tones while preserving speech-band signals', () => {
+  const sr = 48000;
+  const durationSec = 0.25;
+  const n = sr * durationSec;
+
+  const speechTone = new Float32Array(n);
+  const aliasTone = new Float32Array(n);
+  for (let i = 0; i < n; i += 1) {
+    const t = i / sr;
+    speechTone[i] = 0.5 * Math.sin(2 * Math.PI * 1000 * t);
+    aliasTone[i] = 0.5 * Math.sin(2 * Math.PI * 18000 * t);
+  }
+
+  const resampledSpeech = resampleTo16kMono(speechTone, sr);
+  const resampledAlias = resampleTo16kMono(aliasTone, sr);
+
+  const rms = (arr: Float32Array) => {
+    let sum = 0;
+    // Skip tiny edge fade regions
+    for (let i = 100; i < arr.length - 100; i += 1) {
+      sum += arr[i] * arr[i];
+    }
+    return Math.sqrt(sum / Math.max(1, arr.length - 200));
+  };
+
+  assert.ok(rms(resampledSpeech) > 0.3, '1 kHz speech signal should be preserved');
+  assert.ok(
+    rms(resampledAlias) < 0.05,
+    '18 kHz alias signal must be strongly attenuated by anti-aliasing filter',
+  );
+});
+
+test('prepareAudioForWhisper rejects silence/clicks and normalizes quiet speech cleanly', () => {
+  // 1. Pure silence + single 10ms click spike -> rejected
+  const silenceWithClick = new Float32Array(16000);
+  for (let i = 0; i < 80; i += 1) {
+    silenceWithClick[200 + i] = 0.6;
+  }
+  const silentResult = prepareAudioForWhisper(silenceWithClick);
+  assert.equal(silentResult.hasSpeech, false);
+  assert.equal(silentResult.audio.length, 0);
+
+  // 2. 1.5s clip with 0.5s dead air, 0.5s quiet speech (0.04 amp), 0.5s dead air
+  const quietSpeech = new Float32Array(24000);
+  for (let i = 8000; i < 16000; i += 1) {
+    quietSpeech[i] = 0.04 * Math.sin((2 * Math.PI * 440 * i) / 16000);
+  }
+  const prepared = prepareAudioForWhisper(quietSpeech);
+  assert.equal(prepared.hasSpeech, true);
+  assert.ok(prepared.audio.length < quietSpeech.length, 'Dead air should be trimmed');
+  let maxPeak = 0;
+  for (let i = 0; i < prepared.audio.length; i += 1) {
+    const a = Math.abs(prepared.audio[i]);
+    if (a > maxPeak) maxPeak = a;
+  }
+  assert.ok(maxPeak > 0.35 && maxPeak <= 1.0, `Quiet speech should normalize cleanly (got ${maxPeak})`);
+});
+
+test('cleanWhisperTranscript removes artifacts, hallucinations, and repetition loops while keeping queries', () => {
+  assert.equal(
+    cleanWhisperTranscript('<|startoftranscript|><|en|>[BLANK_AUDIO] (keyboard clicking)'),
+    '',
+  );
+  assert.equal(cleanWhisperTranscript('Thank you for watching.'), '');
+  assert.equal(
+    cleanWhisperTranscript('calculus calculus calculus chain rule.'),
+    'calculus chain rule',
+  );
+  assert.equal(
+    cleanWhisperTranscript('  machine learning machine learning notes  '),
+    'machine learning notes',
+  );
+  assert.equal(
+    cleanWhisperTranscript('Thank you letter template for internship'),
+    'Thank you letter template for internship',
+  );
+});
+
+
+
+
 
 
 

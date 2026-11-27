@@ -2,11 +2,14 @@ import {useRef, useState} from 'react';
 import {
   AlertTriangle,
   FileText,
+  Folder,
   FolderOpen,
+  FolderPlus,
   Plus,
   RefreshCw,
   RotateCcw,
   Search,
+  SlidersHorizontal,
   Sparkles,
   Upload,
   X,
@@ -14,8 +17,11 @@ import {
 import {getSynthesisFormatLabel} from '../cloud/synthesisOutput';
 import {LocalSearchPanel} from '../components/LocalSearchPanel';
 import {
-  CATEGORIES,
-  CATEGORY_STYLE,
+  getCategoryStyle,
+  getSubfoldersForCategory,
+  sanitizeCategoryLabel,
+} from '../storage/categoryConfig';
+import {
   Category,
   EmbeddingModelConfig,
   EmbeddingProgressState,
@@ -26,6 +32,7 @@ import {
   SearchResultItem,
   SourceDocumentEntry,
   StoredNoteEntry,
+  UserCategoryConfig,
   VoiceRuntimeState,
   VoiceSearchSettings,
   WhisperProgressState,
@@ -38,7 +45,9 @@ interface WorkspacePageProps {
   problems: ScanProblem[];
   scanning: boolean;
   activePillar: PillarFilter;
+  categoryConfigs: UserCategoryConfig[];
   activeCategory: Category | 'All';
+  activeSubfolder: string;
   searchQuery: string;
   localSearchQuery: string;
   searching: boolean;
@@ -50,14 +59,21 @@ interface WorkspacePageProps {
   voiceSettings: VoiceSearchSettings;
   voiceRuntime: VoiceRuntimeState;
   whisperProgress: WhisperProgressState;
+  onActivateAndStartMic: () => void;
   onStartPushToTalk: () => void;
   onStopPushToTalk: () => void;
+  onCancelVoiceCapture: () => void;
   onMasterKillSwitch: () => void;
   onNavigate: (route: RoutePath) => void;
   connectionState: WorkspaceConnectionState;
   folderName: string | null;
+  workspaceError?: string | null;
+  reconnectRequiresPicker?: boolean;
   busy: boolean;
   onSelectCategory: (category: Category | 'All') => void;
+  onSelectSubfolder: (subfolder: string) => void;
+  onOpenCategoryManager: () => void;
+  onQuickAddSubfolder: (categoryName: string, subfolderName: string) => Promise<void> | void;
   onSearchChange: (query: string) => void;
   onLocalSearchChange: (query: string) => void;
   onResetFilters: () => void;
@@ -71,6 +87,7 @@ interface WorkspacePageProps {
   onImportMarkdown: (file: File) => Promise<void>;
   onImportDemoPdf?: (file: File) => Promise<void>;
   onReconnect: () => void;
+  onForgetWorkspace?: () => void;
   onRescan: () => void;
   onSelectFolder: () => void;
 }
@@ -80,31 +97,31 @@ const PILLAR_META: Record<
   {title: string; description: string}
 > = {
   all: {
-    title: 'All Workspace Notes',
+    title: 'All Notes & Files',
     description:
-      'Combined view across immutable sources, manual writing, and AI study outputs.',
+      'Your sources, personal notes, and AI study guides.',
   },
   sources: {
     title: 'Sources',
     description:
-      'Papers, PDFs, lecture transcripts, and reference texts. Strictly read-only to Noodle.',
+      'PDFs, transcripts, and reference readings.',
   },
   manual: {
-    title: 'Manual Notes',
+    title: 'My Notes',
     description:
-      'Your own writing, seminar drafts, and problem sets. AI may read but never edit.',
+      'Your personal notes and drafts.',
   },
   ai: {
-    title: 'AI Outputs',
+    title: 'AI Notes',
     description:
-      'Study guides, cross-note comparisons, and synthesized outlines generated in ai/.',
+      'Study guides, flashcards, and practice exams.',
   },
 };
 
 const PILLAR_SHORT_LABEL: Record<Pillar, string> = {
   sources: 'Sources',
-  manual: 'Manual',
-  ai: 'AI Output',
+  manual: 'My Notes',
+  ai: 'AI Notes',
 };
 
 export function WorkspacePage({
@@ -113,7 +130,9 @@ export function WorkspacePage({
   problems,
   scanning,
   activePillar,
+  categoryConfigs,
   activeCategory,
+  activeSubfolder,
   searchQuery,
   localSearchQuery,
   searching,
@@ -125,14 +144,21 @@ export function WorkspacePage({
   voiceSettings,
   voiceRuntime,
   whisperProgress,
+  onActivateAndStartMic,
   onStartPushToTalk,
   onStopPushToTalk,
+  onCancelVoiceCapture,
   onMasterKillSwitch,
   onNavigate,
   connectionState,
   folderName,
+  workspaceError = null,
+  reconnectRequiresPicker = false,
   busy,
   onSelectCategory,
+  onSelectSubfolder,
+  onOpenCategoryManager,
+  onQuickAddSubfolder,
   onSearchChange,
   onLocalSearchChange,
   onResetFilters,
@@ -146,12 +172,15 @@ export function WorkspacePage({
   onImportMarkdown,
   onImportDemoPdf,
   onReconnect,
+  onForgetWorkspace,
   onRescan,
   onSelectFolder,
 }: WorkspacePageProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const pdfInputRef = useRef<HTMLInputElement | null>(null);
   const [problemsOpen, setProblemsOpen] = useState(false);
+  const [addingInlineSubfolder, setAddingInlineSubfolder] = useState(false);
+  const [inlineSubfolderName, setInlineSubfolderName] = useState('');
   const pillarInfo = PILLAR_META[activePillar];
   const showProblemsPanel = problemsOpen || problems.length > 0;
 
@@ -159,7 +188,17 @@ export function WorkspacePage({
     if (activePillar !== 'all' && entry.pillar !== activePillar) {
       return false;
     }
-    if (activeCategory !== 'All' && entry.note.category !== activeCategory) {
+    if (
+      activeCategory !== 'All' &&
+      entry.note.category.toLowerCase() !== activeCategory.toLowerCase()
+    ) {
+      return false;
+    }
+    if (
+      activeCategory !== 'All' &&
+      activeSubfolder !== 'All' &&
+      (entry.note.subfolder ?? '').toLowerCase() !== activeSubfolder.toLowerCase()
+    ) {
       return false;
     }
     if (searchQuery.trim()) {
@@ -191,9 +230,29 @@ export function WorkspacePage({
     (d) => d.kind === 'unsupported-pptx',
   ).length;
   const totalShownCount = filteredNotes.length + filteredSources.length;
+  const activeCategorySubfolders =
+    activeCategory === 'All'
+      ? []
+      : getSubfoldersForCategory(categoryConfigs, activeCategory);
 
   const hasActiveFilters =
-    activeCategory !== 'All' || searchQuery.trim().length > 0;
+    activeCategory !== 'All' ||
+    activeSubfolder !== 'All' ||
+    searchQuery.trim().length > 0;
+
+  const handleSaveInlineSubfolder = async () => {
+    if (activeCategory === 'All') return;
+    const clean = sanitizeCategoryLabel(inlineSubfolderName);
+    if (!clean) {
+      setAddingInlineSubfolder(false);
+      setInlineSubfolderName('');
+      return;
+    }
+    await onQuickAddSubfolder(activeCategory, clean);
+    onSelectSubfolder(clean);
+    setAddingInlineSubfolder(false);
+    setInlineSubfolderName('');
+  };
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6 px-4 py-6 lg:px-8">
@@ -228,44 +287,99 @@ export function WorkspacePage({
 
       {/* Reconnect Banner on Reload */}
       {connectionState === 'restored-needs-permission' && folderName && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#E0A83E]/40 bg-[#E0A83E]/10 px-4 py-3 text-xs">
-          <div className="space-y-0.5">
-            <p className="font-semibold text-[#F6DFA8]">
-              Reconnect workspace &ldquo;{folderName}&rdquo;
-            </p>
-            <p className="text-[#D8C9A3]">
-              Browser reload requires a click to restore read/write permission
-              to your local folder.
-            </p>
+        <div className="space-y-2 rounded-xl border border-[#4D3D20] bg-[#181510] px-4 py-3 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <p className="font-semibold text-[#F6DFA8]">
+                Reconnect workspace &ldquo;{folderName}&rdquo;
+              </p>
+              <p className="text-[#D8C9A3]">
+                Click to restore access to your local folder after reloading.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={onReconnect}
+                disabled={busy}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#E0A83E] px-3.5 text-xs font-semibold text-[#111216] transition-colors duration-150 hover:bg-[#ECB955] disabled:opacity-50"
+              >
+                {reconnectRequiresPicker ? (
+                  <FolderOpen className="h-3.5 w-3.5" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                <span>
+                  {busy
+                    ? 'Opening...'
+                    : reconnectRequiresPicker
+                      ? `Re-select ${folderName}`
+                      : 'Reconnect workspace'}
+                </span>
+              </button>
+              {onForgetWorkspace && (
+                <button
+                  type="button"
+                  onClick={onForgetWorkspace}
+                  className="inline-flex h-8 items-center rounded-lg border border-[#343949] bg-[#141720] px-3 text-xs text-[#B2B7C4] hover:text-[#ECEBE6]"
+                >
+                  Forget
+                </button>
+              )}
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={onReconnect}
-            disabled={busy}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#E0A83E] px-3.5 text-xs font-semibold text-[#111216] transition-colors hover:bg-[#ECB955] disabled:opacity-50"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            <span>{busy ? 'Reconnecting...' : 'Reconnect workspace'}</span>
-          </button>
+          {workspaceError && (
+            <p className="text-xs text-rose-300">{workspaceError}</p>
+          )}
         </div>
       )}
 
-      {/* Subtle Demo Mode Notice if no real folder connected */}
+      {/* Connected Scan Error Notice */}
+      {connectionState === 'connected' && workspaceError && (
+        <div
+          role="alert"
+          className="rounded-xl border border-[#5A2934] bg-[#1C1216] px-4 py-2.5 text-xs text-rose-200"
+        >
+          {workspaceError}
+        </div>
+      )}
+
+      {/* Subtle Demo / Read-Only Mode Notice if no writable folder connected */}
       {connectionState !== 'connected' &&
         connectionState !== 'restored-needs-permission' && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#242835] bg-[#12141B] px-4 py-2.5 text-xs text-[#9CA1AE]">
-            <span>
-              Viewing in-memory demo notes. Select a local folder to persist
-              notes to disk.
-            </span>
-            <button
-              type="button"
-              onClick={onSelectFolder}
-              className="inline-flex items-center gap-1.5 font-medium text-[#E0A83E] hover:text-[#F0C264]"
-            >
-              <FolderOpen className="h-3.5 w-3.5" />
-              <span>Select Workspace Folder</span>
-            </button>
+          <div className="space-y-2 rounded-xl border border-[#242835] bg-[#12141B] px-4 py-2.5 text-xs text-[#9CA1AE]">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>
+                {folderName?.endsWith('(Read-Only)')
+                  ? `Viewing ${folderName}. Edits stay in memory unless you connect with write access.`
+                  : connectionState === 'blocked-iframe'
+                    ? 'Folder access is blocked inside an embedded window. Open Noodle in its own tab to pick or reconnect a folder.'
+                    : 'Using sample notes in memory. Pick a folder to save files on your computer.'}
+              </span>
+              <div className="flex items-center gap-3">
+                {connectionState === 'blocked-iframe' && (
+                  <a
+                    href={typeof window !== 'undefined' ? window.location.href : '#/'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 font-medium text-[#E0A83E] hover:text-[#F0C264]"
+                  >
+                    <span>Open in a new tab</span>
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={onSelectFolder}
+                  className="inline-flex items-center gap-1.5 font-medium text-[#E0A83E] hover:text-[#F0C264]"
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                  <span>Select Workspace Folder</span>
+                </button>
+              </div>
+            </div>
+            {workspaceError && (
+              <p className="text-xs text-rose-300">{workspaceError}</p>
+            )}
           </div>
         )}
 
@@ -293,12 +407,12 @@ export function WorkspacePage({
       </div>
 
       {/* Pillar Heading + Import .md */}
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#202430] pb-5">
+      <div className="flex flex-wrap items-end justify-between gap-4 pb-2">
         <div className="space-y-1">
-          <h1 className="font-serif text-2xl font-semibold tracking-tight text-[#F5F1E8] sm:text-3xl">
+          <h1 className="font-serif text-2xl font-semibold text-[#F5F1E8] sm:text-3xl">
             {pillarInfo.title}
           </h1>
-          <p className="text-xs text-[#9198A8] sm:text-sm">
+          <p className="max-w-prose text-xs text-[#9198A8] sm:text-sm">
             {pillarInfo.description}
           </p>
         </div>
@@ -310,7 +424,7 @@ export function WorkspacePage({
                 type="button"
                 onClick={onRescan}
                 disabled={scanning}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#272C3A] bg-[#151822] px-3 text-xs font-medium text-[#C8CCD6] whitespace-nowrap transition-colors hover:border-[#3A4154] hover:text-[#F4F0E7] disabled:opacity-50"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#272C3A] bg-[#151822] px-3 text-xs font-medium text-[#C8CCD6] whitespace-nowrap transition-colors duration-150 hover:border-[#3A4154] hover:text-[#F4F0E7] disabled:opacity-50"
               >
                 <RefreshCw
                   className={`h-3.5 w-3.5 ${scanning ? 'animate-spin text-[#E0A83E]' : ''}`}
@@ -322,9 +436,9 @@ export function WorkspacePage({
                 type="button"
                 onClick={() => setProblemsOpen((prev) => !prev)}
                 aria-expanded={showProblemsPanel}
-                className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium whitespace-nowrap tabular-nums transition-colors ${
+                className={`inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium whitespace-nowrap tabular-nums transition-colors duration-150 ${
                   problems.length > 0
-                    ? 'border-amber-500/45 bg-amber-500/12 text-amber-200 hover:bg-amber-500/20'
+                    ? 'border-amber-500 bg-[#1F1A14] text-amber-200 hover:bg-[#272017]'
                     : 'border-[#272C3A] bg-[#151822] text-[#9CA1AE] hover:border-[#3A4154] hover:text-[#F4F0E7]'
                 }`}
               >
@@ -337,7 +451,7 @@ export function WorkspacePage({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#272C3A] bg-[#151822] px-3 text-xs font-medium text-[#C8CCD6] whitespace-nowrap transition-colors hover:border-[#3A4154] hover:text-[#F4F0E7]"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#272C3A] bg-[#151822] px-3 text-xs font-medium text-[#C8CCD6] whitespace-nowrap transition-colors duration-150 hover:border-[#3A4154] hover:text-[#F4F0E7]"
           >
             <Upload className="h-3.5 w-3.5" />
             <span>Import .md</span>
@@ -347,7 +461,7 @@ export function WorkspacePage({
             <button
               type="button"
               onClick={() => pdfInputRef.current?.click()}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#272C3A] bg-[#151822] px-3 text-xs font-medium text-[#C8CCD6] whitespace-nowrap transition-colors hover:border-[#3A4154] hover:text-[#F4F0E7]"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#272C3A] bg-[#151822] px-3 text-xs font-medium text-[#C8CCD6] whitespace-nowrap transition-colors duration-150 hover:border-[#3A4154] hover:text-[#F4F0E7]"
             >
               <FileText className="h-3.5 w-3.5 text-[#E0A83E]" />
               <span>Open Demo PDF</span>
@@ -377,8 +491,10 @@ export function WorkspacePage({
         voiceSettings={voiceSettings}
         voiceRuntime={voiceRuntime}
         whisperProgress={whisperProgress}
+        onActivateAndStartMic={onActivateAndStartMic}
         onStartPushToTalk={onStartPushToTalk}
         onStopPushToTalk={onStopPushToTalk}
+        onCancelVoiceCapture={onCancelVoiceCapture}
         onMasterKillSwitch={onMasterKillSwitch}
         onOpenSettings={onNavigate}
         onDownloadModel={onDownloadModel}
@@ -396,16 +512,15 @@ export function WorkspacePage({
               <span className="font-semibold text-amber-200 tabular-nums">
                 {unsupportedPptxCount}
               </span>{' '}
-              slide file{unsupportedPptxCount === 1 ? '' : 's'} in{' '}
-              <code className="font-mono">sources/</code>. Slide formats (.pptx)
-              are not supported yet — PDF, .txt, and .md files are indexed locally.
+              slide file{unsupportedPptxCount === 1 ? '' : 's'} in Sources.
+              Slide formats (.pptx) are not supported yet — PDF, .txt, and .md
+              files are searchable.
             </span>
           ) : (
             <span>
-              Indexed source formats in <code className="font-mono">sources/</code>:
-              PDF, <code className="font-mono">.txt</code>, and{' '}
-              <code className="font-mono">.md</code>. Slide formats (.pptx) are not
-              supported yet.
+              Supported source files: PDF, <code className="font-mono">.txt</code>,
+              and <code className="font-mono">.md</code>. Slide formats (.pptx)
+              are not supported yet.
             </span>
           )}
         </div>
@@ -460,15 +575,14 @@ export function WorkspacePage({
 
           {problems.length === 0 ? (
             <p className="mt-2 text-[#888F9F]">
-              No unreadable or malformed files found in <code className="font-mono">sources/</code>,{' '}
-              <code className="font-mono">manual/</code>, or <code className="font-mono">ai/</code>.
+              No file problems found. All notes and sources are readable.
             </p>
           ) : (
-            <div className="mt-3 divide-y divide-[#2A261E] rounded-lg border border-amber-500/25 bg-[#12141A]">
+            <div className="mt-3 space-y-1.5 rounded-lg bg-[#0F1117] p-2">
               {problems.map((problem) => (
                 <div
                   key={problem.id}
-                  className="flex flex-wrap items-start justify-between gap-2 px-3.5 py-2.5"
+                  className="flex flex-wrap items-start justify-between gap-2 rounded-md px-2.5 py-2 hover:bg-[#161923]"
                 >
                   <div className="min-w-0 space-y-0.5">
                     <p className="truncate font-mono text-[11px] font-medium text-amber-200">
@@ -476,8 +590,8 @@ export function WorkspacePage({
                     </p>
                     <p className="text-[#B8BDC9]">{problem.reason}</p>
                   </div>
-                  <span className="shrink-0 font-mono text-[11px] text-[#7D8496]">
-                    {problem.pillar}/
+                  <span className="shrink-0 text-[11px] text-[#7D8496]">
+                    {PILLAR_SHORT_LABEL[problem.pillar]}
                   </span>
                 </div>
               ))}
@@ -486,45 +600,172 @@ export function WorkspacePage({
         </section>
       )}
 
-      {/* Interactive Category Filter Pills */}
-      <div
-        role="toolbar"
-        aria-label="Filter by category"
-        className="flex flex-wrap items-center gap-2"
-      >
-        <button
-          type="button"
-          onClick={() => onSelectCategory('All')}
-          aria-pressed={activeCategory === 'All'}
-          className={`h-8 rounded-full border px-3.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60 ${
-            activeCategory === 'All'
-              ? 'border-[#E0A83E]/55 bg-[#E0A83E]/15 text-[#F3CA77]'
-              : 'border-[#262B38] bg-[#141720] text-[#9CA1AE] hover:border-[#363C4D] hover:text-[#ECEBE6]'
-          }`}
+      {/* Customizable Top-Level Category Tabs & Nested Subfolders */}
+      <div className="space-y-3">
+        <div
+          role="toolbar"
+          aria-label="Filter by category"
+          className="flex flex-wrap items-center gap-1.5"
         >
-          All Categories
-        </button>
+          <button
+            type="button"
+            onClick={() => {
+              onSelectCategory('All');
+              onSelectSubfolder('All');
+              setAddingInlineSubfolder(false);
+              setInlineSubfolderName('');
+            }}
+            aria-pressed={activeCategory === 'All'}
+            className={`h-9 rounded-lg border px-3.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E] ${
+              activeCategory === 'All'
+                ? 'border-[#E0A83E] bg-[#1D2230] text-[#F3CA77]'
+                : 'border-[#252936] bg-[#141720] text-[#9CA1AE] hover:border-[#363C4D] hover:text-[#ECEBE6]'
+            }`}
+          >
+            All Categories
+          </button>
 
-        {CATEGORIES.map((category) => {
-          const style = CATEGORY_STYLE[category];
-          const isSelected = activeCategory === category;
-          return (
+          {categoryConfigs.map((cat) => {
+            const style = getCategoryStyle(cat.name, categoryConfigs);
+            const isSelected =
+              activeCategory !== 'All' &&
+              activeCategory.toLowerCase() === cat.name.toLowerCase();
+            return (
+              <button
+                key={cat.id}
+                type="button"
+                onClick={() => {
+                  onSelectCategory(cat.name);
+                  onSelectSubfolder('All');
+                  setAddingInlineSubfolder(false);
+                  setInlineSubfolderName('');
+                }}
+                aria-pressed={isSelected}
+                className={`flex h-9 items-center gap-2 rounded-lg border px-3.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E] ${
+                  isSelected
+                    ? `${style.activeBg} ${style.activeBorder} ${style.text}`
+                    : 'border-[#252936] bg-[#141720] text-[#9CA1AE] hover:border-[#363C4D] hover:text-[#ECEBE6]'
+                }`}
+              >
+                <span className={`h-2 w-2 rounded-[2px] ${style.dot}`} />
+                <span>{cat.name}</span>
+                {cat.subfolders.length > 0 && (
+                  <span className="text-[11px] opacity-75 tabular-nums">
+                    {cat.subfolders.length}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+
+          <button
+            type="button"
+            onClick={onOpenCategoryManager}
+            title="Add, rename, recolor categories and subfolders"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#252936] bg-[#141720] px-3 text-xs font-medium text-[#B8BDC9] whitespace-nowrap shrink-0 transition-colors duration-150 hover:border-[#3A4154] hover:text-[#F3CA77]"
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5 text-[#E0A83E]" />
+            <span>Customize</span>
+          </button>
+        </div>
+
+        {/* Subfolders row when a top-level category is selected */}
+        {activeCategory !== 'All' && (
+          <div
+            key={activeCategory}
+            role="toolbar"
+            aria-label={`Subfolders in ${activeCategory}`}
+            className="flex flex-wrap items-center gap-1.5 pl-1 text-xs"
+          >
+            <span className="mr-1 inline-flex items-center gap-1.5 text-xs font-medium text-[#7D8496]">
+              <Folder className="h-3.5 w-3.5 text-[#E0A83E]" />
+              <span>{activeCategory}</span>
+            </span>
+
             <button
-              key={category}
               type="button"
-              onClick={() => onSelectCategory(category)}
-              aria-pressed={isSelected}
-              className={`flex h-8 items-center gap-2 rounded-full border px-3.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60 ${
-                isSelected
-                  ? `${style.activeBg} ${style.activeBorder} ${style.text}`
+              onClick={() => onSelectSubfolder('All')}
+              aria-pressed={activeSubfolder === 'All'}
+              className={`h-8 rounded-lg border px-2.5 text-xs font-medium transition-colors duration-150 ${
+                activeSubfolder === 'All'
+                  ? 'border-[#E0A83E] bg-[#1D2230] text-[#F3CA77]'
                   : 'border-[#262B38] bg-[#141720] text-[#9CA1AE] hover:border-[#363C4D] hover:text-[#ECEBE6]'
               }`}
             >
-              <span className={`h-2 w-2 rounded-full ${style.dot}`} />
-              <span>{category}</span>
+              All
             </button>
-          );
-        })}
+
+            {activeCategorySubfolders.map((sub) => {
+              const subSelected =
+                activeSubfolder !== 'All' &&
+                activeSubfolder.toLowerCase() === sub.toLowerCase();
+              return (
+                <button
+                  key={sub}
+                  type="button"
+                  onClick={() => onSelectSubfolder(sub)}
+                  aria-pressed={subSelected}
+                  className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors duration-150 ${
+                    subSelected
+                      ? 'border-[#E0A83E] bg-[#1D2230] text-[#F3CA77]'
+                      : 'border-[#262B38] bg-[#141720] text-[#9CA1AE] hover:border-[#363C4D] hover:text-[#ECEBE6]'
+                  }`}
+                >
+                  <Folder className="h-3.5 w-3.5" />
+                  <span>{sub}</span>
+                </button>
+              );
+            })}
+
+            {addingInlineSubfolder ? (
+              <span className="inline-flex items-center gap-1.5">
+                <input
+                  type="text"
+                  autoFocus
+                  value={inlineSubfolderName}
+                  onChange={(e) => setInlineSubfolderName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void handleSaveInlineSubfolder();
+                    } else if (e.key === 'Escape') {
+                      setAddingInlineSubfolder(false);
+                      setInlineSubfolderName('');
+                    }
+                  }}
+                  placeholder={`New subfolder in ${activeCategory}...`}
+                  className="h-8 w-44 rounded-lg border border-[#E0A83E] bg-[#0D0F14] px-2.5 text-xs text-[#ECEBE6] placeholder-[#656C7D] focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleSaveInlineSubfolder()}
+                  className="h-8 rounded-lg bg-[#E0A83E] px-2.5 text-xs font-semibold text-[#111216] hover:bg-[#ECB955]"
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddingInlineSubfolder(false);
+                    setInlineSubfolderName('');
+                  }}
+                  className="h-8 rounded-lg border border-[#2C3140] px-2.5 text-xs text-[#9CA1AE] hover:text-white"
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setAddingInlineSubfolder(true)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#262B38] bg-[#141720] px-2.5 text-xs font-medium text-[#9CA1AE] transition-colors duration-150 hover:border-[#3A4154] hover:text-[#F3CA77]"
+              >
+                <FolderPlus className="h-3.5 w-3.5" />
+                <span>Add Subfolder</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Note & Source Grid or Empty State */}
@@ -535,9 +776,13 @@ export function WorkspacePage({
             No matching notes
           </h2>
           <p className="mt-1 max-w-md text-xs leading-relaxed text-[#888F9F]">
-            {hasActiveFilters
-              ? 'No notes match your current title filter or selected category.'
-              : 'This pillar does not contain any notes yet.'}
+            {activeCategory !== 'All' && !searchQuery.trim()
+              ? activeSubfolder !== 'All'
+                ? `No notes in ${activeCategory} / ${activeSubfolder} yet.`
+                : `No notes in ${activeCategory} yet.`
+              : hasActiveFilters
+                ? 'No notes match your current title filter or selected category.'
+                : 'This pillar does not contain any notes yet.'}
           </p>
           <div className="mt-5 flex items-center gap-3">
             {hasActiveFilters && (
@@ -564,7 +809,7 @@ export function WorkspacePage({
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {filteredNotes.map((entry) => {
             const {note} = entry;
-            const catStyle = CATEGORY_STYLE[note.category];
+            const catStyle = getCategoryStyle(note.category, categoryConfigs);
             const isAiNote =
               entry.pillar === 'ai' || note.aiMeta?.isAiGenerated === true;
             const dateStr = new Date(note.updatedAt).toLocaleDateString(
@@ -577,14 +822,14 @@ export function WorkspacePage({
                 key={`${entry.pillar}-${entry.fileName}-${note.id}`}
                 className={`group flex flex-col justify-between rounded-xl border transition-colors duration-150 ${
                   isAiNote
-                    ? 'border-violet-400/30 bg-[#151521] hover:border-violet-400/55 hover:bg-[#191928]'
+                    ? 'border-[#332E4D] bg-[#151521] hover:border-[#4B4470] hover:bg-[#191928]'
                     : 'border-[#232734] bg-[#141720] hover:border-[#373D50] hover:bg-[#181C27]'
                 }`}
               >
                 <button
                   type="button"
                   onClick={() => onOpenNote(entry)}
-                  className="flex h-full w-full flex-col justify-between rounded-xl p-5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60"
+                  className="flex h-full w-full flex-col justify-between rounded-xl p-5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]"
                 >
                   <div>
                     {/* Unboxed typographic metadata line */}
@@ -593,18 +838,16 @@ export function WorkspacePage({
                         <span className="inline-flex items-center gap-1.5 font-medium text-violet-300">
                           <Sparkles className="h-3.5 w-3.5 text-violet-300" />
                           <span>
-                            AI Output
+                            AI Note
                             {note.aiMeta
                               ? ` · ${getSynthesisFormatLabel(note.aiMeta.format)}`
                               : ''}
                           </span>
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1.5 font-medium text-[#D5D4CD]">
-                          <span
-                            className={`h-1.5 w-1.5 rounded-full ${catStyle.dot}`}
-                          />
+                        <span className={`font-medium ${catStyle.text}`}>
                           {note.category}
+                          {note.subfolder ? ` / ${note.subfolder}` : ''}
                         </span>
                       )}
                       {!isAiNote && (
@@ -629,10 +872,10 @@ export function WorkspacePage({
                   </div>
 
                   {/* Quiet Footer */}
-                  <div className="mt-5 flex items-center justify-between border-t border-[#1F2330] pt-3 text-[11px] text-[#767D8F]">
-                    <span className="truncate font-mono tabular-nums">
+                  <div className="mt-5 flex items-center justify-between text-[11px] text-[#767D8F]">
+                    <span className="truncate tabular-nums">
                       {note.aiMeta
-                        ? `${note.aiMeta.model} · ${note.aiMeta.sourcesUsed.length} sources`
+                        ? `${note.aiMeta.sourcesUsed.length} sources`
                         : `${entry.wordCount} words`}
                     </span>
                     <span className="shrink-0 font-medium text-[#9CA1AE] transition-colors group-hover:text-[#E0A83E]">
@@ -671,7 +914,7 @@ export function WorkspacePage({
                 <button
                   type="button"
                   onClick={() => onOpenSourceDoc(doc)}
-                  className="flex h-full w-full flex-col justify-between rounded-xl p-5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60"
+                  className="flex h-full w-full flex-col justify-between rounded-xl p-5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]"
                 >
                   <div>
                     <div className="flex items-center gap-2 text-xs text-[#8990A2]">
@@ -693,7 +936,7 @@ export function WorkspacePage({
                     </p>
                   </div>
 
-                  <div className="mt-5 flex items-center justify-between border-t border-[#1F2330] pt-3 text-[11px] text-[#767D8F]">
+                  <div className="mt-5 flex items-center justify-between text-[11px] text-[#767D8F]">
                     <span className="tabular-nums">
                       {doc.kind === 'unsupported-pptx'
                         ? 'Not indexed'

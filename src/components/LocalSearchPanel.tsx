@@ -1,3 +1,4 @@
+import {useRef} from 'react';
 import {
   ArrowUpRight,
   Cpu,
@@ -7,10 +8,11 @@ import {
   MicOff,
   Search,
   Settings,
+  Square,
   X,
 } from 'lucide-react';
 import {AVAILABLE_EMBEDDING_MODELS} from '../search/chunker';
-import {formatHotkeyLabel} from '../voice/voiceConfig';
+import {formatHotkeyLabel, WHISPER_MODELS} from '../voice/voiceConfig';
 import {
   EmbeddingModelConfig,
   EmbeddingProgressState,
@@ -34,8 +36,10 @@ interface LocalSearchPanelProps {
   voiceSettings: VoiceSearchSettings;
   voiceRuntime: VoiceRuntimeState;
   whisperProgress: WhisperProgressState;
+  onActivateAndStartMic: () => void;
   onStartPushToTalk: () => void;
   onStopPushToTalk: () => void;
+  onCancelVoiceCapture: () => void;
   onMasterKillSwitch: () => void;
   onOpenSettings: (route: RoutePath) => void;
   onDownloadModel: () => void;
@@ -46,8 +50,8 @@ interface LocalSearchPanelProps {
 
 const PILLAR_LABEL: Record<Pillar, string> = {
   sources: 'Sources',
-  manual: 'Manual',
-  ai: 'AI Output',
+  manual: 'My Notes',
+  ai: 'AI Notes',
 };
 
 function formatMb(bytes: number): string {
@@ -69,8 +73,10 @@ export function LocalSearchPanel({
   voiceSettings,
   voiceRuntime,
   whisperProgress,
+  onActivateAndStartMic,
   onStartPushToTalk,
   onStopPushToTalk,
+  onCancelVoiceCapture,
   onMasterKillSwitch,
   onOpenSettings,
   onDownloadModel,
@@ -78,6 +84,7 @@ export function LocalSearchPanel({
   onChangeModelId,
   onOpenResult,
 }: LocalSearchPanelProps) {
+  const pressStartRef = useRef<number | null>(null);
   const isBusy =
     progressState.status === 'downloading' ||
     progressState.status === 'loading' ||
@@ -85,6 +92,32 @@ export function LocalSearchPanel({
 
   const isListening = voiceRuntime.phase === 'listening';
   const isTranscribing = voiceRuntime.phase === 'transcribing';
+  const micLevel = Math.max(0, Math.min(1, voiceRuntime.micLevel ?? 0));
+  const micReady = Boolean(voiceRuntime.micReady);
+  const activeWhisperModel =
+    WHISPER_MODELS.find((m) => m.id === voiceSettings.whisperModelId) ??
+    WHISPER_MODELS[0];
+
+  const handleMicPressStart = () => {
+    if (isTranscribing) {
+      return;
+    }
+    if (isListening) {
+      pressStartRef.current = -1;
+      onStopPushToTalk();
+      return;
+    }
+    pressStartRef.current = Date.now();
+    onStartPushToTalk();
+  };
+
+  const handleMicPressEnd = () => {
+    const started = pressStartRef.current;
+    pressStartRef.current = null;
+    if (started && started > 0 && Date.now() - started >= 450 && isListening) {
+      onStopPushToTalk();
+    }
+  };
 
   const effectiveModeLabel = !aiEnabled
     ? 'Word-match search (Local AI paused)'
@@ -105,8 +138,8 @@ export function LocalSearchPanel({
             type="search"
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
-            placeholder="Search concepts or keywords across sources/, manual/, and ai/..."
-            aria-label="Search workspace blocks"
+            placeholder="Search all notes and files..."
+            aria-label="Search all notes and files"
             className="h-10 w-full rounded-lg border border-[#262B38] bg-[#0D0F14] pr-9 pl-9 text-xs text-[#ECEBE6] placeholder-[#686F80] transition-colors focus:border-[#E0A83E]/60 focus:outline-none"
           />
           {query && (
@@ -126,26 +159,32 @@ export function LocalSearchPanel({
             <>
               <button
                 type="button"
-                onMouseDown={onStartPushToTalk}
-                onMouseUp={onStopPushToTalk}
+                onMouseDown={handleMicPressStart}
+                onMouseUp={handleMicPressEnd}
                 onMouseLeave={() => {
-                  if (isListening) {
+                  if (
+                    pressStartRef.current &&
+                    pressStartRef.current > 0 &&
+                    Date.now() - pressStartRef.current >= 450 &&
+                    isListening
+                  ) {
+                    pressStartRef.current = null;
                     onStopPushToTalk();
                   }
                 }}
                 onTouchStart={(e) => {
                   e.preventDefault();
-                  onStartPushToTalk();
+                  handleMicPressStart();
                 }}
                 onTouchEnd={(e) => {
                   e.preventDefault();
-                  onStopPushToTalk();
+                  handleMicPressEnd();
                 }}
                 disabled={isTranscribing}
-                title={`Hold to speak (${formatHotkeyLabel(voiceSettings.pushToTalkHotkey)} while tab focused)`}
-                className={`inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition-colors select-none ${
+                title={`Click to start/stop, or hold to speak (${formatHotkeyLabel(voiceSettings.pushToTalkHotkey)})`}
+                className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition-colors select-none ${
                   isListening
-                    ? 'border-rose-400 bg-rose-500/25 text-rose-100 animate-pulse'
+                    ? 'border-rose-400 bg-rose-500/20 text-rose-100'
                     : isTranscribing
                       ? 'border-[#E0A83E]/50 bg-[#E0A83E]/15 text-[#F4D084]'
                       : 'border-[#333A4C] bg-[#181C26] text-[#ECEBE6] hover:border-[#E0A83E]/55 hover:text-[#F6DFA8]'
@@ -153,39 +192,74 @@ export function LocalSearchPanel({
               >
                 {isTranscribing ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-[#E0A83E]" />
+                ) : isListening ? (
+                  <Square className="h-3 w-3 fill-rose-300 text-rose-300" />
                 ) : (
                   <Mic className="h-3.5 w-3.5 text-[#E0A83E]" />
                 )}
                 <span>
                   {isListening
-                    ? 'Release to search'
+                    ? micReady
+                      ? 'Listening · Click to Search'
+                      : 'Starting mic…'
                     : isTranscribing
-                      ? 'Whisper…'
-                      : `Hold to Talk (${formatHotkeyLabel(voiceSettings.pushToTalkHotkey)})`}
+                      ? 'Transcribing…'
+                      : 'Speak to Search'}
                 </span>
+                {isListening && micReady && (
+                  <span
+                    aria-label="Live microphone input level"
+                    className="inline-flex h-3.5 items-end gap-0.5"
+                  >
+                    {[0.12, 0.24, 0.4, 0.58, 0.78].map((threshold, idx) => {
+                      const active = micLevel >= threshold;
+                      const heights = ['h-1', 'h-1.5', 'h-2.5', 'h-3', 'h-3.5'];
+                      return (
+                        <span
+                          key={threshold}
+                          className={`w-0.5 rounded-full transition-colors ${heights[idx]} ${
+                            active ? 'bg-rose-200' : 'bg-rose-300/30'
+                          }`}
+                        />
+                      );
+                    })}
+                  </span>
+                )}
               </button>
 
-              {voiceRuntime.activeTrackCount > 0 && (
+              {(isListening || isTranscribing) && (
+                <button
+                  type="button"
+                  onClick={onCancelVoiceCapture}
+                  title="Cancel voice capture"
+                  className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#2D3344] bg-[#161922] px-2.5 text-xs font-medium text-[#C8CCD6] hover:text-white"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  <span>Cancel</span>
+                </button>
+              )}
+
+              {(voiceRuntime.activeTrackCount > 0 || isListening) && (
                 <button
                   type="button"
                   onClick={onMasterKillSwitch}
-                  title="Master Kill Switch: stop all microphone tracks immediately"
+                  title="Stop all microphone streams immediately"
                   className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-rose-500/60 bg-rose-600 px-2.5 text-xs font-semibold text-white hover:bg-rose-500"
                 >
                   <MicOff className="h-3.5 w-3.5" />
-                  <span>Kill Mic</span>
+                  <span>Stop Mic</span>
                 </button>
               )}
             </>
           ) : (
             <button
               type="button"
-              onClick={() => onOpenSettings('/settings')}
-              title="Voice search is experimental and OFF by default. Configure in Settings."
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#272C3A] bg-[#161922] px-2.5 text-xs font-medium text-[#8E95A5] transition-colors hover:border-[#3A4154] hover:text-[#ECEBE6]"
+              onClick={onActivateAndStartMic}
+              title="Turn on on-device voice search and start speaking"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#2C3242] bg-[#161922] px-3 text-xs font-medium text-[#D5D4CD] transition-colors hover:border-[#E0A83E]/55 hover:text-[#F6DFA8]"
             >
-              <MicOff className="h-3.5 w-3.5 text-[#767D8F]" />
-              <span>Voice Off</span>
+              <Mic className="h-3.5 w-3.5 text-[#E0A83E]" />
+              <span>Voice Search</span>
             </button>
           )}
 
@@ -233,16 +307,10 @@ export function LocalSearchPanel({
         <div className="flex flex-wrap items-center gap-2">
           <Cpu className="h-3.5 w-3.5 text-[#E0A83E]" />
           <span className="font-medium text-[#D5D4CD]">{effectiveModeLabel}</span>
-          <span aria-hidden="true">·</span>
-          <span className="font-mono text-[#7D8496]">
-            {embeddingConfig.modelId}
-          </span>
           {embeddingConfig.isDownloaded && (
             <>
               <span aria-hidden="true">·</span>
-              <span className="tabular-nums text-[#8E95A5]">
-                Cached offline ({embeddingConfig.vectorSize || 384}d)
-              </span>
+              <span className="text-[#8E95A5]">Saved offline</span>
             </>
           )}
         </div>
@@ -250,27 +318,33 @@ export function LocalSearchPanel({
         <span>Nothing leaves this device</span>
       </div>
 
-      {/* Experimental Voice Search status strip (only shown when experimental voice is ON) */}
+      {/* Voice Search status strip (only shown when experimental voice is ON) */}
       {voiceSettings.experimentalVoiceEnabled && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#242937] bg-[#0F1219] px-3 py-2 text-[11px] text-[#9CA1AE]">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[#0E1016] px-3 py-2 text-[11px] text-[#9CA1AE]">
           <div className="flex flex-wrap items-center gap-2">
             <Mic className="h-3.5 w-3.5 text-[#E0A83E]" />
             <span>
-              Voice Search active (Whisper Worker ·{' '}
-              <code className="font-mono text-[#C8CCD6]">
-                {voiceSettings.whisperModelId}
-              </code>
-              ). Browser tab must be focused — global OS hotkeys and tray icons
-              are not possible in a browser.
+              Voice Search active (tap Speak to Search, or hold{' '}
+              {formatHotkeyLabel(voiceSettings.pushToTalkHotkey)}) ·{' '}
+              <span className="text-[#C8CCD6]">
+                {activeWhisperModel.label.split(' (')[0]}
+              </span>
             </span>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-3">
             {voiceRuntime.wakeWordActive && (
-              <span className="font-mono text-emerald-300">
+              <span className="text-emerald-300">
                 Wake word: &ldquo;{voiceSettings.wakeWordKeyword}&rdquo;
               </span>
             )}
+            <button
+              type="button"
+              onClick={onMasterKillSwitch}
+              className="font-medium text-[#9CA1AE] hover:text-rose-300"
+            >
+              Turn off
+            </button>
             <button
               type="button"
               onClick={() => onOpenSettings('/settings')}
@@ -287,7 +361,7 @@ export function LocalSearchPanel({
         (whisperProgress.status === 'downloading' ||
           whisperProgress.status === 'loading' ||
           whisperProgress.status === 'transcribing') && (
-          <div className="space-y-1.5 rounded-lg border border-[#262B38] bg-[#0E1015] p-3 text-xs">
+          <div className="space-y-1.5 rounded-lg bg-[#0E1016] p-3 text-xs">
             <div className="flex items-center justify-between gap-2">
               <span className="inline-flex items-center gap-1.5 font-medium text-[#F4D084]">
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-[#E0A83E]" />
@@ -296,7 +370,7 @@ export function LocalSearchPanel({
                     'Running local Whisper worker...'}
                 </span>
               </span>
-              <span className="font-mono text-[11px] text-[#A4AAB7] tabular-nums">
+              <span className="text-[11px] text-[#A4AAB7] tabular-nums">
                 {whisperProgress.progress}%
               </span>
             </div>
@@ -317,7 +391,7 @@ export function LocalSearchPanel({
 
       {/* Cancellable download / indexing progress bar */}
       {isBusy && (
-        <div className="space-y-2 rounded-lg border border-[#262B38] bg-[#0E1015] p-3 text-xs">
+        <div className="space-y-2 rounded-lg bg-[#0E1016] p-3 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="inline-flex items-center gap-1.5 font-medium text-[#F4D084]">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-[#E0A83E]" />
@@ -330,7 +404,7 @@ export function LocalSearchPanel({
                       : 'Loading cached model...')}
               </span>
             </span>
-            <span className="font-mono text-[11px] text-[#A4AAB7] tabular-nums">
+            <span className="text-[11px] text-[#A4AAB7] tabular-nums">
               {progressState.status === 'indexing' && progressState.totalToIndex
                 ? `${progressState.indexedCount ?? 0}/${progressState.totalToIndex} blocks`
                 : progressState.totalBytes > 0
@@ -373,34 +447,32 @@ export function LocalSearchPanel({
 
       {/* Search Results */}
       {query.trim() && (
-        <div className="space-y-2 border-t border-[#1F2330] pt-3">
+        <div className="space-y-2 pt-2">
           <div className="flex items-center justify-between text-[11px] text-[#888F9F] tabular-nums">
             <span>
               {searching
-                ? 'Searching blocks across all folders...'
-                : `${results.length} matching ${results.length === 1 ? 'block' : 'blocks'} (${searchMode === 'semantic' ? 'semantic similarity' : 'word match'})`}
+                ? 'Searching across all notes and files...'
+                : `${results.length} matching ${results.length === 1 ? 'section' : 'sections'} (${searchMode === 'semantic' ? 'semantic similarity' : 'word match'})`}
             </span>
-            <span>Top-{results.length || 0}</span>
+            <span>Top {results.length || 0}</span>
           </div>
 
           {!searching && results.length === 0 ? (
             <p className="py-2 text-xs text-[#7D8496]">
-              No matching blocks found across <code className="font-mono">sources/</code>,{' '}
-              <code className="font-mono">manual/</code>, or{' '}
-              <code className="font-mono">ai/</code>.
+              No matching notes or files found.
             </p>
           ) : (
-            <div className="divide-y divide-[#1D212D] rounded-lg border border-[#222634] bg-[#0F1117]">
+            <div className="space-y-1 rounded-lg bg-[#0E1016] p-1.5">
               {results.map((item) => (
                 <button
                   key={item.chunkId}
                   type="button"
                   onClick={() => onOpenResult(item)}
-                  className="group flex w-full items-start justify-between gap-4 px-3.5 py-3 text-left text-xs transition-colors hover:bg-[#171A24] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60"
+                  className="group flex w-full items-start justify-between gap-4 rounded-md px-3 py-2.5 text-left text-xs transition-colors duration-150 hover:bg-[#171A24] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]"
                 >
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#8990A2]">
-                      <span className="font-mono font-semibold text-[#E0A83E] tabular-nums">
+                      <span className="font-semibold text-[#E0A83E] tabular-nums">
                         {item.score.toFixed(2)} {item.scoreLabel}
                       </span>
                       <span aria-hidden="true">·</span>
@@ -423,7 +495,7 @@ export function LocalSearchPanel({
                   </div>
 
                   <span className="mt-1 inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-[#888F9F] group-hover:text-[#E0A83E]">
-                    <span>Open block</span>
+                    <span>Open</span>
                     <ArrowUpRight className="h-3.5 w-3.5" />
                   </span>
                 </button>

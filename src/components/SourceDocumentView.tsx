@@ -93,11 +93,9 @@ export function SourceDocumentView({
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-xs text-[#7D8496]">
                 <Lock className="h-3 w-3 text-[#E0A83E]" />
-                <span>Sources (immutable)</span>
+                <span>Sources (read-only)</span>
                 <span aria-hidden="true">·</span>
                 <span>{kindLabel}</span>
-                <span aria-hidden="true">·</span>
-                <span className="truncate font-mono text-[11px]">{doc.path}</span>
               </div>
             </div>
           </div>
@@ -141,8 +139,8 @@ export function SourceDocumentView({
             )}
 
             <div className="text-xs text-[#888F9F] tabular-nums">
-              {doc.chunks.length} extracted{' '}
-              {doc.chunks.length === 1 ? 'block' : 'blocks'}
+              {doc.chunks.length}{' '}
+              {doc.chunks.length === 1 ? 'section' : 'sections'}
             </div>
           </div>
         </div>
@@ -153,7 +151,7 @@ export function SourceDocumentView({
       ) : (
         <div ref={containerRef} className="flex-1 overflow-y-auto px-4 py-8 sm:px-8">
           <div className="mx-auto max-w-3xl space-y-6">
-            <div className="space-y-2 border-b border-[#1E222E] pb-5">
+            <div className="space-y-2 pb-3">
               <div className="flex items-center gap-2 text-xs text-[#8990A2]">
                 <FileText className="h-3.5 w-3.5 text-[#E0A83E]" />
                 <span>{kindLabel}</span>
@@ -162,13 +160,13 @@ export function SourceDocumentView({
                   {Math.max(1, Math.round(doc.size / 1024))} KB
                 </span>
               </div>
-              <h1 className="font-serif text-3xl leading-tight font-semibold tracking-tight text-[#F5F1E8]">
+              <h1 className="font-serif text-3xl leading-tight font-semibold text-[#F5F1E8]">
                 {doc.title}
               </h1>
             </div>
 
             {doc.kind === 'unsupported-pptx' ? (
-              <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-5 text-xs leading-relaxed text-amber-100">
+              <div className="rounded-xl border border-[#523F1B] bg-[#19150E] p-5 text-xs leading-relaxed text-amber-100">
                 <div className="flex items-start gap-2.5">
                   <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
                   <div className="space-y-1">
@@ -176,38 +174,32 @@ export function SourceDocumentView({
                       Slide formats (.pptx) are not supported yet
                     </p>
                     <p className="text-amber-100/85">
-                      Noodle currently extracts text and embeddings from PDF, .txt,
-                      and .md files in <code className="font-mono">sources/</code>.
-                      Export slide decks to PDF or Markdown to index and search
-                      their contents locally.
+                      Noodle currently reads PDF, .txt, and .md files in Sources.
+                      Export slide decks to PDF or Markdown to search their
+                      contents.
                     </p>
                   </div>
                 </div>
               </div>
             ) : doc.chunks.length === 0 ? (
               <div className="rounded-xl border border-[#232734] bg-[#13161E] p-6 text-xs text-[#8E95A5]">
-                No extractable text was found in this source document (scanned
-                image-only PDFs require OCR before indexing).
+                No readable text found in this file (scanned image-only PDFs
+                need OCR first).
               </div>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {doc.chunks.map((chunk) => (
                   <div
                     key={chunk.blockId}
                     data-block-id={chunk.blockId}
-                    className="rounded-xl border border-[#1E222E] bg-[#13161E]/75 p-4 transition-colors"
+                    className="rounded-xl bg-[#13161E] p-4 transition-colors"
                   >
-                    <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px] text-[#7D8496]">
-                      <span>
-                        {chunk.headingPath.length > 0
-                          ? chunk.headingPath.join(' › ')
-                          : 'Section'}
-                      </span>
-                      <span className="font-mono tabular-nums">
-                        {chunk.blockId}
-                      </span>
-                    </div>
-                    <p className="text-[14.5px] leading-relaxed text-[#E4E2DB] whitespace-pre-wrap">
+                    {chunk.headingPath.length > 0 && (
+                      <div className="mb-1.5 text-[11px] font-medium text-[#7D8496]">
+                        {chunk.headingPath.join(' › ')}
+                      </div>
+                    )}
+                    <p className="max-w-prose text-[14.5px] leading-relaxed whitespace-pre-wrap text-[#E4E2DB]">
                       {chunk.text}
                     </p>
                   </div>

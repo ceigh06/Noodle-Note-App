@@ -80,7 +80,7 @@ export async function proposeNoteFolderOrganizing(
     const noteVectors = chunksByNoteId.get(noteId) || [];
     let bestFolder = 'manual/Study';
     let bestScore = 0.55;
-    let reason = 'Category keyword match';
+    let reason = 'Matches default study folder';
 
     if (noteVectors.length > 0 && folderVectors.size > 0) {
       let maxSim = -1;
@@ -109,17 +109,29 @@ export async function proposeNoteFolderOrganizing(
       if (maxSim > 0.3) {
         bestFolder = targetFolder;
         bestScore = Number(Math.min(0.98, Math.max(0.6, maxSim)).toFixed(2));
-        reason = `Embedding similarity (${Math.round(maxSim * 100)}% match with existing notes)`;
+        reason = `Similar to notes in this folder (${Math.round(maxSim * 100)}% match)`;
       }
     } else {
-      // Fallback category mapping
+      // Fallback category/subfolder mapping
       const cat = entry.note.category;
-      if (cat === 'Study') bestFolder = 'manual/Calculus';
-      else if (cat === 'Assignment') bestFolder = 'manual/ComputerScience';
-      else if (cat === 'Work') bestFolder = 'manual/Work';
-      else bestFolder = 'manual/General';
+      const sub = entry.note.subfolder;
+      if (sub) {
+        bestFolder = `manual/${cat}/${sub}`;
+        reason = `Matches "${cat} / ${sub}"`;
+      } else if (cat === 'Study') {
+        bestFolder = 'manual/Calculus';
+        reason = `Matches "${cat}" category`;
+      } else if (cat === 'Assignment') {
+        bestFolder = 'manual/ComputerScience';
+        reason = `Matches "${cat}" category`;
+      } else if (cat === 'Work') {
+        bestFolder = 'manual/Work';
+        reason = `Matches "${cat}" category`;
+      } else {
+        bestFolder = `manual/${cat || 'General'}`;
+        reason = `Matches "${cat || 'General'}" category`;
+      }
       bestScore = 0.65;
-      reason = `Category "${cat}" mapping`;
     }
 
     if (currentFolder === 'manual' || currentFolder !== bestFolder) {
@@ -142,6 +154,7 @@ export async function proposeNoteFolderOrganizing(
 export interface ExecuteBatchMoveParams {
   approvedItems: Array<{noteId: string; fromPath: string; toPath: string}>;
   notes: StoredNoteEntry[];
+  onMoveNote?: (entry: StoredNoteEntry, toPath: string) => Promise<void> | void;
 }
 
 export async function executeBatchMoveAndLog(
@@ -158,8 +171,11 @@ export async function executeBatchMoveAndLog(
     const contentHashBefore = entry.note.contentHash;
     const mtimeBefore = entry.lastModified ?? Date.now();
 
-    // Execute move via storage module
-    await moveNoteToFolder(entry, item.toPath);
+    if (params.onMoveNote) {
+      await params.onMoveNote(entry, item.toPath);
+    } else {
+      await moveNoteToFolder(entry, item.toPath);
+    }
 
     items.push({
       noteId: entry.note.id,
@@ -202,7 +218,7 @@ export async function checkRollbackConflicts(
         noteId: item.noteId,
         fromPath: item.fromPath,
         toPath: item.toPath,
-        reason: 'File no longer exists in workspace.',
+        reason: 'This file is no longer in your workspace.',
       });
       continue;
     }
@@ -216,7 +232,7 @@ export async function checkRollbackConflicts(
         noteId: item.noteId,
         fromPath: item.fromPath,
         toPath: item.toPath,
-        reason: 'File was edited after being moved (newer edit detected on disk).',
+        reason: 'This note was edited after it was moved.',
       });
     }
   }

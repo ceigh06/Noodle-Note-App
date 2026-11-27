@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
+  CategoryManagerModal,
   KeySetupModal,
   NewNoteModal,
   NonEmptyFolderModal,
@@ -55,6 +56,8 @@ import {
   FolderInspection,
   forgetSavedWorkspace,
   importDemoPdfSource,
+  importReadOnlyFolderFromFiles,
+  hasActiveWorkspace,
   initializeWorkspaceFolders,
   isFileSystemAccessSupported,
   loadDemoSourceDocuments,
@@ -70,9 +73,23 @@ import {
   updateNote,
 } from './storage/workspaceStorage';
 import {
+  addSubfolderToCategory,
+  addTopCategory,
+  deleteSubfolderInCategory,
+  deleteTopCategory,
+  getDefaultCategoryConfigs,
+  loadCategoryConfigs,
+  mergeDiscoveredNoteCategories,
+  renameSubfolderInCategory,
+  renameTopCategory,
+  saveCategoryConfigs,
+  updateTopCategoryColor,
+} from './storage/categoryConfig';
+import {
   AiNoteMetadata,
   BacklinkRecord,
   Category,
+  CategoryColorKey,
   EmbeddingModelConfig,
   EmbeddingProgressState,
   ExternalEditConflict,
@@ -84,6 +101,7 @@ import {
   StoredNoteEntry,
   SuggestedConnection,
   TipTapDoc,
+  UserCategoryConfig,
   VoiceRuntimeState,
   VoiceSearchSettings,
   WhisperProgressState,
@@ -131,13 +149,19 @@ export default function App() {
   } | null>(null);
   const [pickerError, setPickerError] = useState<string | null>(null);
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [reconnectRequiresPicker, setReconnectRequiresPicker] = useState(false);
 
   const [notes, setNotes] = useState<StoredNoteEntry[]>(DEMO_NOTES);
   const [sourceDocuments, setSourceDocuments] = useState<SourceDocumentEntry[]>(
     [],
   );
   const [activePillar, setActivePillar] = useState<PillarFilter>('all');
+  const [categoryConfigs, setCategoryConfigs] = useState<UserCategoryConfig[]>(
+    () => getDefaultCategoryConfigs(),
+  );
   const [activeCategory, setActiveCategory] = useState<Category | 'All'>('All');
+  const [activeSubfolder, setActiveSubfolder] = useState<string>('All');
+  const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [localSearchQuery, setLocalSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
@@ -156,6 +180,10 @@ export default function App() {
   const [miniNotebookOpen, setMiniNotebookOpen] = useState(false);
   const [aiChatOpen, setAiChatOpen] = useState(false);
   const [newNoteOpen, setNewNoteOpen] = useState(false);
+  const [newNotePrefill, setNewNotePrefill] = useState<{
+    title: string;
+    body: string;
+  } | null>(null);
   const [keySetupOpen, setKeySetupOpen] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState<StoredNoteEntry | null>(
     null,
@@ -192,6 +220,8 @@ export default function App() {
     lastError: null,
     wakeWordActive: false,
     wakeWordStatusMessage: null,
+    micReady: false,
+    micLevel: 0,
   });
 
   const selectedEntryRef = useRef<StoredNoteEntry | null>(null);
@@ -208,8 +238,16 @@ export default function App() {
   embeddingConfigRef.current = embeddingConfig;
   const voiceSettingsRef = useRef<VoiceSearchSettings>(voiceSettings);
   voiceSettingsRef.current = voiceSettings;
+  const activeCategoryRef = useRef<Category | 'All'>(activeCategory);
+  activeCategoryRef.current = activeCategory;
+  const activeSubfolderRef = useRef<string>(activeSubfolder);
+  activeSubfolderRef.current = activeSubfolder;
   const activeCaptureRef = useRef<EphemeralCaptureHandle | null>(null);
+  const captureStartingRef = useRef(false);
+  const stopDuringStartActionRef = useRef<'none' | 'transcribe' | 'cancel'>('none');
   const hotkeyHeldRef = useRef(false);
+  const routeRef = useRef(route);
+  routeRef.current = route;
 
   const triggerIndexSync = useCallback(
     async (
@@ -246,9 +284,24 @@ export default function App() {
           scanWorkspaceChanges(reason, options),
           scanSourceDocumentsInWorkspace(),
         ]);
+        notesRef.current = summary.entries;
+        sourceDocumentsRef.current = sourceScan.documents;
         setNotes(summary.entries);
         setSourceDocuments(sourceScan.documents);
         setScanProblems([...summary.problems, ...sourceScan.problems]);
+        setCategoryConfigs((prev) => {
+          const merged = mergeDiscoveredNoteCategories(
+            prev,
+            summary.entries.map((e) => ({
+              category: e.note.category,
+              subfolder: e.note.subfolder,
+            })),
+          );
+          if (merged !== prev) {
+            void saveCategoryConfigs(merged);
+          }
+          return merged;
+        });
 
         const open = selectedEntryRef.current;
         if (open) {
@@ -260,7 +313,8 @@ export default function App() {
             const divergesFromOpen =
               diskMatch.note.contentHash !== open.note.contentHash ||
               diskMatch.note.title !== open.note.title ||
-              diskMatch.note.category !== open.note.category;
+              diskMatch.note.category !== open.note.category ||
+              (diskMatch.note.subfolder ?? '') !== (open.note.subfolder ?? '');
 
             if (wasEditedInScan || divergesFromOpen) {
               setExternalConflict({
@@ -311,21 +365,43 @@ export default function App() {
   }, [runWorkspaceScan]);
 
   const finalizeFolderConnection = useCallback(
-    async (handle: FileSystemDirectoryHandle) => {
-      await initializeWorkspaceFolders(handle);
+    async (
+      handle: FileSystemDirectoryHandle,
+      options?: {directManualRoot?: boolean},
+    ) => {
+      await initializeWorkspaceFolders(handle, options);
       setFolderName(handle.name);
       setRestoredHandle(handle);
       setPendingInit(null);
+      setPickerError(null);
+      setReconnectRequiresPicker(false);
       setSelectedEntry(null);
       setSelectedSourceDoc(null);
       setTargetBlockId(null);
       setConnectionState('connected');
-      await refreshDiskNotes();
-      if (route === '/') {
+      if (routeRef.current === '/') {
         navigate('/workspace');
       }
+      try {
+        await refreshDiskNotes();
+      } catch (scanErr) {
+        if (
+          scanErr instanceof StorageError &&
+          scanErr.code === 'PERMISSION_DENIED'
+        ) {
+          setReconnectRequiresPicker(true);
+          setConnectionState('restored-needs-permission');
+          setPickerError(scanErr.message);
+          return;
+        }
+        setPickerError(
+          scanErr instanceof Error
+            ? scanErr.message
+            : 'Connected folder, but scanning some files failed.',
+        );
+      }
     },
-    [navigate, refreshDiskNotes, route],
+    [navigate, refreshDiskNotes],
   );
 
   // Subscribe to local worker progress and load stored embedding + voice settings
@@ -347,6 +423,9 @@ export default function App() {
         phase: vs.experimentalVoiceEnabled ? 'idle' : 'off',
       }));
     });
+    void loadCategoryConfigs().then((cfg) => {
+      setCategoryConfigs(cfg);
+    });
     void queryMicrophonePermissionState().then((perm) => {
       setVoiceRuntime((prev) => ({...prev, micPermissionState: perm}));
     });
@@ -367,6 +446,7 @@ export default function App() {
       if (cancelled) {
         return;
       }
+      sourceDocumentsRef.current = demoSources;
       setSourceDocuments(demoSources);
       setConnectionState(nextState);
       void triggerIndexSync(DEMO_NOTES, demoSources);
@@ -394,27 +474,34 @@ export default function App() {
         setFolderName(restored.folderName);
 
         if (restored.permission === 'granted') {
-          if (restored.inspection && restored.inspection.hasAllNoodleDirs) {
-            setConnectionState('connected');
+          setReconnectRequiresPicker(false);
+          setConnectionState('connected');
+          try {
             await refreshDiskNotes();
-          } else if (restored.inspection && !restored.inspection.isEmpty) {
-            setPendingInit({
-              handle: restored.handle,
-              inspection: restored.inspection,
-            });
-            setConnectionState('confirm-non-empty');
-          } else {
-            await finalizeFolderConnection(restored.handle);
+          } catch (scanErr) {
+            if (!cancelled) {
+              setReconnectRequiresPicker(true);
+              setConnectionState('restored-needs-permission');
+              setPickerError(
+                scanErr instanceof Error
+                  ? scanErr.message
+                  : `Could not read "${restored.folderName}". Re-select or reconnect the folder.`,
+              );
+            }
           }
         } else {
           const cachedSources = await getStoredSourceDocuments().catch(() => []);
           if (!cancelled && cachedSources.length > 0) {
             setSourceDocuments(cachedSources);
           }
+          setReconnectRequiresPicker(restored.permission === 'denied');
           setConnectionState('restored-needs-permission');
         }
-      } catch {
+      } catch (err) {
         if (!cancelled) {
+          if (err instanceof StorageError) {
+            setPickerError(err.message);
+          }
           await activateDemoWorkspace('unselected');
         }
       }
@@ -424,7 +511,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [finalizeFolderConnection, refreshDiskNotes, triggerIndexSync]);
+  }, [refreshDiskNotes, triggerIndexSync]);
 
   // Background workspace scanning on tab focus, visibility regain, and every 30s while visible
   useEffect(() => {
@@ -456,15 +543,24 @@ export default function App() {
     };
   }, [connectionState, runWorkspaceScan]);
 
-  const handleSelectFolder = async () => {
+  const handleSelectFolder = async (
+    startInHandle?: FileSystemDirectoryHandle,
+  ) => {
     if (workspaceBusy) {
       return;
     }
     setWorkspaceBusy(true);
     setPickerError(null);
     try {
-      const {handle, inspection} = await pickWorkspaceFolder();
-      if (!inspection.isEmpty && !inspection.hasNoodleManifest) {
+      const {handle, inspection} = await pickWorkspaceFolder(
+        startInHandle ? {startInHandle} : undefined,
+      );
+      if (
+        !inspection.isEmpty &&
+        (!inspection.hasKnownNoodleWorkspace ||
+          inspection.looksLikeCodeProject ||
+          inspection.looksLikeDirectManualSubfolder)
+      ) {
         setPendingInit({handle, inspection});
         setConnectionState('confirm-non-empty');
       } else {
@@ -473,6 +569,9 @@ export default function App() {
     } catch (err) {
       if (err instanceof StorageError) {
         if (err.code === 'USER_CANCELLED') {
+          setPickerError(
+            'No folder was connected because your browser suppressed the folder permission prompt. In Opera, open opera://settings/content/all, search this site, and click Reset permissions (or try a Private Window / Chrome / Edge) so the permission prompt appears again.',
+          );
           return;
         }
         if (err.code === 'BLOCKED_IFRAME') {
@@ -485,6 +584,14 @@ export default function App() {
           setPickerError(err.message);
           return;
         }
+        if (err.code === 'USER_GESTURE_REQUIRED' && err.pendingHandle) {
+          setRestoredHandle(err.pendingHandle);
+          setFolderName(err.pendingHandle.name);
+          setReconnectRequiresPicker(false);
+          setConnectionState('restored-needs-permission');
+          setPickerError(err.message);
+          return;
+        }
         setPickerError(err.message);
       } else {
         setPickerError((err as Error).message || 'Unable to select folder.');
@@ -494,39 +601,116 @@ export default function App() {
     }
   };
 
-  const handleReconnect = async () => {
-    if (!restoredHandle || workspaceBusy) {
+  const handleImportReadOnlyFolder = async (files: FileList) => {
+    if (workspaceBusy) {
       return;
     }
     setWorkspaceBusy(true);
     setPickerError(null);
     try {
+      const imported = await importReadOnlyFolderFromFiles(files);
+      notesRef.current = imported.notes;
+      sourceDocumentsRef.current = imported.sources;
+      setNotes(imported.notes);
+      setSourceDocuments(imported.sources);
+      setScanProblems(imported.problems);
+      setFolderName(`${imported.folderName} (Read-Only)`);
+      setRestoredHandle(null);
+      setPendingInit(null);
+      setPickerError(null);
+      setReconnectRequiresPicker(false);
+      setConnectionState(
+        isFileSystemAccessSupported() ? 'unselected' : 'unsupported',
+      );
+      setSelectedEntry(null);
+      setSelectedSourceDoc(null);
+      setTargetBlockId(null);
+      setCategoryConfigs((prev) => {
+        const merged = mergeDiscoveredNoteCategories(
+          prev,
+          imported.notes.map((e) => ({
+            category: e.note.category,
+            subfolder: e.note.subfolder,
+          })),
+        );
+        if (merged !== prev) {
+          void saveCategoryConfigs(merged);
+        }
+        return merged;
+      });
+      void triggerIndexSync(imported.notes, imported.sources);
+      if (routeRef.current === '/') {
+        navigate('/workspace');
+      }
+    } catch (err) {
+      setPickerError(
+        err instanceof Error ? err.message : 'Unable to read selected folder.',
+      );
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  };
+
+  const handleReconnect = async () => {
+    if (!restoredHandle || workspaceBusy) {
+      return;
+    }
+    if (reconnectRequiresPicker) {
+      await handleSelectFolder();
+      return;
+    }
+
+    setWorkspaceBusy(true);
+    setPickerError(null);
+    try {
       const result = await reconnectSavedWorkspace(restoredHandle);
       if (result.permission !== 'granted') {
+        setReconnectRequiresPicker(true);
         setPickerError(
-          'Permission was not granted. Click "Reconnect workspace" and allow access to continue.',
+          `Your browser did not grant access for "${restoredHandle.name}". Click "Re-select ${restoredHandle.name}" to pick the folder directly.`,
         );
         return;
       }
 
-      if (result.inspection && result.inspection.hasAllNoodleDirs) {
-        setFolderName(restoredHandle.name);
-        setConnectionState('connected');
+      setReconnectRequiresPicker(false);
+      setFolderName(restoredHandle.name);
+      setConnectionState('connected');
+      if (routeRef.current === '/') {
+        navigate('/workspace');
+      }
+      try {
         await refreshDiskNotes();
-        if (route === '/') {
-          navigate('/workspace');
+      } catch (scanErr) {
+        if (
+          scanErr instanceof StorageError &&
+          scanErr.code === 'PERMISSION_DENIED'
+        ) {
+          setReconnectRequiresPicker(true);
+          setConnectionState('restored-needs-permission');
+          setPickerError(scanErr.message);
+          return;
         }
-      } else if (result.inspection && !result.inspection.isEmpty) {
-        setPendingInit({
-          handle: restoredHandle,
-          inspection: result.inspection,
-        });
-        setConnectionState('confirm-non-empty');
-      } else {
-        await finalizeFolderConnection(restoredHandle);
+        setPickerError(
+          scanErr instanceof Error
+            ? scanErr.message
+            : 'Reconnected folder, but scanning some files failed.',
+        );
       }
     } catch (err) {
-      setPickerError((err as Error).message || 'Could not reconnect folder.');
+      if (err instanceof StorageError) {
+        if (err.code === 'BLOCKED_IFRAME') {
+          setConnectionState('blocked-iframe');
+          setPickerError(err.message);
+          return;
+        }
+        if (err.code === 'NOT_FOUND' || err.code === 'PERMISSION_DENIED') {
+          setReconnectRequiresPicker(true);
+        }
+        setPickerError(err.message);
+      } else {
+        setReconnectRequiresPicker(true);
+        setPickerError((err as Error).message || 'Could not reconnect folder.');
+      }
     } finally {
       setWorkspaceBusy(false);
     }
@@ -538,17 +722,20 @@ export default function App() {
     setFolderName(null);
     setPendingInit(null);
     setPickerError(null);
+    setReconnectRequiresPicker(false);
     setSelectedEntry(null);
     setSelectedSourceDoc(null);
     setTargetBlockId(null);
     setExternalConflict(null);
     setScanProblems([]);
     const demoSources = await loadDemoSourceDocuments().catch(() => []);
+    sourceDocumentsRef.current = demoSources;
     setSourceDocuments(demoSources);
     setLocalSearchQuery('');
     setSearchResults([]);
     setBacklinks([]);
     setSuggestions([]);
+    notesRef.current = DEMO_NOTES;
     setNotes(DEMO_NOTES);
     setConnectionState(
       isFileSystemAccessSupported() ? 'unselected' : 'unsupported',
@@ -572,6 +759,7 @@ export default function App() {
     title: string,
     category: Category,
     content: TipTapDoc,
+    subfolder?: string,
   ): Promise<StoredNoteEntry> => {
     const now = new Date().toISOString();
     const id = createUuid();
@@ -591,6 +779,7 @@ export default function App() {
         schemaVersion: CURRENT_SCHEMA_VERSION,
         title,
         category,
+        ...(subfolder ? {subfolder} : {}),
         pillar: 'manual',
         createdAt: now,
         updatedAt: now,
@@ -604,38 +793,66 @@ export default function App() {
     title: string,
     category: Category,
     body: string,
+    subfolder?: string,
   ) => {
+    const trimmedBody = body.trim();
+    const parsedDoc = trimmedBody ? markdownToTiptap(trimmedBody) : undefined;
     let created: StoredNoteEntry;
     if (connectionState === 'connected') {
       created = await createNote({
         pillar: 'manual',
         title,
         category,
-        bodyText: body,
+        ...(subfolder ? {subfolder} : {}),
+        ...(parsedDoc ? {content: parsedDoc} : {bodyText: ''}),
       });
       await refreshDiskNotes();
     } else {
-      const text = body.trim();
-      created = await createInMemoryNote(title, category, {
-        type: 'doc',
-        content: [
-          {
-            type: 'paragraph',
-            attrs: {id: createUuid()},
-            ...(text ? {content: [{type: 'text', text}]} : {}),
-          },
-        ],
-      });
+      created = await createInMemoryNote(
+        title,
+        category,
+        parsedDoc ?? {
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              attrs: {id: createUuid()},
+            },
+          ],
+        },
+        subfolder,
+      );
       const updatedList = [created, ...notesRef.current];
+      notesRef.current = updatedList;
       setNotes(updatedList);
       void triggerIndexSync(updatedList, sourceDocumentsRef.current);
+    }
+
+    if (subfolder) {
+      setCategoryConfigs((prev) => {
+        const merged = mergeDiscoveredNoteCategories(prev, [
+          {category, subfolder},
+        ]);
+        if (merged !== prev) {
+          void saveCategoryConfigs(merged);
+        }
+        return merged;
+      });
     }
 
     if (activePillar === 'sources' || activePillar === 'ai') {
       setActivePillar('manual');
     }
-    if (activeCategory !== 'All' && activeCategory !== category) {
-      setActiveCategory('All');
+    if (activeCategory !== 'All') {
+      if (activeCategory.toLowerCase() !== category.toLowerCase()) {
+        setActiveCategory(category);
+        setActiveSubfolder(subfolder || 'All');
+      } else if (
+        activeSubfolder !== 'All' &&
+        activeSubfolder.toLowerCase() !== (subfolder ?? '').toLowerCase()
+      ) {
+        setActiveSubfolder(subfolder || 'All');
+      }
     }
     setSelectedSourceDoc(null);
     setTargetBlockId(null);
@@ -667,6 +884,7 @@ export default function App() {
     } else {
       created = await createInMemoryNote(title, 'Study', doc);
       const updatedList = [created, ...notesRef.current];
+      notesRef.current = updatedList;
       setNotes(updatedList);
       void triggerIndexSync(updatedList, sourceDocumentsRef.current);
     }
@@ -690,6 +908,7 @@ export default function App() {
       addedDoc,
       ...sourceDocumentsRef.current.filter((d) => d.id !== addedDoc.id),
     ];
+    sourceDocumentsRef.current = nextSources;
     setSourceDocuments(nextSources);
     void triggerIndexSync(notesRef.current, nextSources);
     setActivePillar('sources');
@@ -765,13 +984,19 @@ export default function App() {
 
   const handleSaveEditorNote = async (
     entry: StoredNoteEntry,
-    patch: {title: string; category: Category; content: TipTapDoc},
+    patch: {
+      title: string;
+      category: Category;
+      subfolder?: string | null;
+      content: TipTapDoc;
+    },
   ): Promise<StoredNoteEntry> => {
     if (connectionState === 'connected') {
       const updated = await updateNote(entry.pillar, entry.fileName, patch);
       const nextList = notesRef.current.map((item) =>
         item.note.id === updated.note.id ? updated : item,
       );
+      notesRef.current = nextList;
       setNotes(nextList);
       setSelectedEntry((prev) =>
         prev && prev.note.id === updated.note.id ? updated : prev,
@@ -779,6 +1004,24 @@ export default function App() {
       setExternalConflict((prev) =>
         prev && prev.noteId === updated.note.id ? null : prev,
       );
+      if (
+        selectedEntryRef.current?.note.id === updated.note.id &&
+        activeCategoryRef.current !== 'All'
+      ) {
+        if (
+          activeCategoryRef.current.toLowerCase() !==
+          updated.note.category.toLowerCase()
+        ) {
+          setActiveCategory(updated.note.category);
+          setActiveSubfolder(updated.note.subfolder || 'All');
+        } else if (
+          activeSubfolderRef.current !== 'All' &&
+          activeSubfolderRef.current.toLowerCase() !==
+            (updated.note.subfolder ?? '').toLowerCase()
+        ) {
+          setActiveSubfolder(updated.note.subfolder || 'All');
+        }
+      }
       void triggerIndexSync(nextList, sourceDocumentsRef.current);
       return updated;
     }
@@ -789,6 +1032,10 @@ export default function App() {
     const normalized = text.replace(/\s+/g, ' ').trim();
     const wordCount = normalized ? normalized.split(/\s+/).length : 0;
     const hash = await computeCanonicalContentHash(ensured);
+    const nextSub =
+      patch.subfolder === undefined
+        ? entry.note.subfolder
+        : patch.subfolder || undefined;
 
     const updated: StoredNoteEntry = {
       ...entry,
@@ -799,15 +1046,20 @@ export default function App() {
         schemaVersion: CURRENT_SCHEMA_VERSION,
         title: patch.title,
         category: patch.category,
+        ...(nextSub ? {subfolder: nextSub} : {}),
         updatedAt: new Date().toISOString(),
         contentHash: hash,
         content: ensured,
       },
     };
+    if (!nextSub) {
+      delete updated.note.subfolder;
+    }
     await syncNoteAssetsIndex(updated.note.id, ensured);
     const nextList = notesRef.current.map((item) =>
       item.note.id === entry.note.id ? updated : item,
     );
+    notesRef.current = nextList;
     setNotes(nextList);
     setSelectedEntry((prev) =>
       prev && prev.note.id === updated.note.id ? updated : prev,
@@ -815,6 +1067,24 @@ export default function App() {
     setExternalConflict((prev) =>
       prev && prev.noteId === updated.note.id ? null : prev,
     );
+    if (
+      selectedEntryRef.current?.note.id === updated.note.id &&
+      activeCategoryRef.current !== 'All'
+    ) {
+      if (
+        activeCategoryRef.current.toLowerCase() !==
+        updated.note.category.toLowerCase()
+      ) {
+        setActiveCategory(updated.note.category);
+        setActiveSubfolder(updated.note.subfolder || 'All');
+      } else if (
+        activeSubfolderRef.current !== 'All' &&
+        activeSubfolderRef.current.toLowerCase() !==
+          (updated.note.subfolder ?? '').toLowerCase()
+      ) {
+        setActiveSubfolder(updated.note.subfolder || 'All');
+      }
+    }
     void triggerIndexSync(nextList, sourceDocumentsRef.current);
     return updated;
   };
@@ -846,6 +1116,7 @@ export default function App() {
       const nextList = notesRef.current.filter(
         (item) => item.note.id !== entry.note.id,
       );
+      notesRef.current = nextList;
       setNotes(nextList);
       await removeNoteFromAssetsIndex(entry.note.id);
       if (orphanAssetsToDelete.length > 0) {
@@ -858,8 +1129,310 @@ export default function App() {
     setTargetBlockId(null);
   };
 
+  const handleApplyDemoMoves = (
+    moves: Array<{noteId: string; toPath: string}>,
+  ) => {
+    const byId = new Map(moves.map((m) => [m.noteId, m.toPath]));
+    const nextList = notesRef.current.map((entry) => {
+      const nextPath = byId.get(entry.note.id);
+      if (!nextPath) {
+        return entry;
+      }
+      const normalized = nextPath.replace(/\\/g, '/').replace(/^\/+/, '');
+      const firstSlash = normalized.indexOf('/');
+      const pillarPart =
+        firstSlash >= 0 ? normalized.slice(0, firstSlash) : entry.pillar;
+      const nextPillar: Pillar =
+        pillarPart === 'ai' ? 'ai' : pillarPart === 'sources' ? 'sources' : 'manual';
+      const nextFileName =
+        firstSlash >= 0 ? normalized.slice(firstSlash + 1) : normalized;
+      const nextModified = Date.now();
+      return {
+        ...entry,
+        pillar: nextPillar,
+        fileName: nextFileName,
+        path: `${nextPillar}/${nextFileName}`,
+        lastModified: nextModified,
+        note: {
+          ...entry.note,
+          pillar: nextPillar,
+        },
+      };
+    });
+    notesRef.current = nextList;
+    setNotes(nextList);
+    if (selectedEntryRef.current) {
+      const updatedOpen = nextList.find(
+        (n) => n.note.id === selectedEntryRef.current?.note.id,
+      );
+      if (updatedOpen) {
+        setSelectedEntry(updatedOpen);
+      }
+    }
+    void triggerIndexSync(nextList, sourceDocumentsRef.current);
+  };
+
+  const propagateNotesCategoryChange = useCallback(
+    async (
+      matcher: (note: StoredNoteEntry['note']) => boolean,
+      mutate: (note: StoredNoteEntry['note']) => {
+        category: Category;
+        subfolder: string | null;
+      },
+    ) => {
+      const matching = notesRef.current.filter(
+        (entry) => entry.pillar !== 'sources' && matcher(entry.note),
+      );
+      if (matching.length === 0) {
+        return;
+      }
+      const nextMap = new Map<string, StoredNoteEntry>();
+      for (const entry of matching) {
+        const nextMeta = mutate(entry.note);
+        if (connectionState === 'connected') {
+          try {
+            const updated = await updateNote(entry.pillar, entry.fileName, {
+              category: nextMeta.category,
+              subfolder: nextMeta.subfolder,
+            });
+            nextMap.set(updated.note.id, updated);
+          } catch {
+            // Keep existing entry if individual file update fails
+          }
+        } else {
+          const updatedNote = {
+            ...entry.note,
+            category: nextMeta.category,
+            ...(nextMeta.subfolder ? {subfolder: nextMeta.subfolder} : {}),
+            updatedAt: new Date().toISOString(),
+          };
+          if (!nextMeta.subfolder) {
+            delete updatedNote.subfolder;
+          }
+          nextMap.set(entry.note.id, {
+            ...entry,
+            note: updatedNote,
+          });
+        }
+      }
+
+      if (nextMap.size > 0) {
+        const nextList = notesRef.current.map(
+          (entry) => nextMap.get(entry.note.id) ?? entry,
+        );
+        notesRef.current = nextList;
+        setNotes(nextList);
+        if (selectedEntryRef.current) {
+          const refreshedOpen = nextMap.get(selectedEntryRef.current.note.id);
+          if (refreshedOpen) {
+            setSelectedEntry(refreshedOpen);
+          }
+        }
+      }
+    },
+    [connectionState],
+  );
+
+  const handleAddCategory = useCallback(
+    async (name: string, color: CategoryColorKey): Promise<string | null> => {
+      const res = addTopCategory(categoryConfigs, name, color);
+      if (res.error) {
+        return res.error;
+      }
+      const saved = await saveCategoryConfigs(res.configs);
+      setCategoryConfigs(saved);
+      return null;
+    },
+    [categoryConfigs],
+  );
+
+  const handleRenameCategory = useCallback(
+    async (categoryId: string, newName: string): Promise<string | null> => {
+      const res = renameTopCategory(categoryConfigs, categoryId, newName);
+      if (res.error || !res.oldName || !res.newName) {
+        return res.error ?? 'Could not rename category.';
+      }
+      const saved = await saveCategoryConfigs(res.configs);
+      setCategoryConfigs(saved);
+      const oldName = res.oldName;
+      const nextName = res.newName;
+      if (activeCategory === oldName) {
+        setActiveCategory(nextName);
+      }
+      await propagateNotesCategoryChange(
+        (n) => n.category.toLowerCase() === oldName.toLowerCase(),
+        (n) => ({
+          category: nextName,
+          subfolder: n.subfolder ?? null,
+        }),
+      );
+      return null;
+    },
+    [activeCategory, categoryConfigs, propagateNotesCategoryChange],
+  );
+
+  const handleChangeCategoryColor = useCallback(
+    async (categoryId: string, color: CategoryColorKey): Promise<void> => {
+      const next = updateTopCategoryColor(categoryConfigs, categoryId, color);
+      const saved = await saveCategoryConfigs(next);
+      setCategoryConfigs(saved);
+    },
+    [categoryConfigs],
+  );
+
+  const handleDeleteCategory = useCallback(
+    async (categoryId: string): Promise<string | null> => {
+      const res = deleteTopCategory(categoryConfigs, categoryId);
+      if (res.error || !res.deletedName || !res.fallbackName) {
+        return res.error ?? 'Could not delete category.';
+      }
+      const saved = await saveCategoryConfigs(res.configs);
+      setCategoryConfigs(saved);
+      const deletedName = res.deletedName;
+      const fallbackName = res.fallbackName;
+      if (activeCategory === deletedName) {
+        setActiveCategory('All');
+        setActiveSubfolder('All');
+      }
+      await propagateNotesCategoryChange(
+        (n) => n.category.toLowerCase() === deletedName.toLowerCase(),
+        () => ({
+          category: fallbackName,
+          subfolder: null,
+        }),
+      );
+      return null;
+    },
+    [activeCategory, categoryConfigs, propagateNotesCategoryChange],
+  );
+
+  const handleAddSubfolder = useCallback(
+    async (categoryId: string, subfolderName: string): Promise<string | null> => {
+      const res = addSubfolderToCategory(
+        categoryConfigs,
+        categoryId,
+        subfolderName,
+      );
+      if (res.error) {
+        return res.error;
+      }
+      const saved = await saveCategoryConfigs(res.configs);
+      setCategoryConfigs(saved);
+      return null;
+    },
+    [categoryConfigs],
+  );
+
+  const handleQuickAddSubfolderByName = useCallback(
+    async (categoryName: string, subfolderName: string): Promise<void> => {
+      const target = categoryConfigs.find(
+        (c) => c.name.toLowerCase() === categoryName.toLowerCase(),
+      );
+      if (!target) {
+        return;
+      }
+      const res = addSubfolderToCategory(
+        categoryConfigs,
+        target.id,
+        subfolderName,
+      );
+      if (!res.error) {
+        const saved = await saveCategoryConfigs(res.configs);
+        setCategoryConfigs(saved);
+      }
+    },
+    [categoryConfigs],
+  );
+
+  const handleRenameSubfolder = useCallback(
+    async (
+      categoryId: string,
+      oldName: string,
+      newName: string,
+    ): Promise<string | null> => {
+      const res = renameSubfolderInCategory(
+        categoryConfigs,
+        categoryId,
+        oldName,
+        newName,
+      );
+      if (res.error || !res.categoryName || !res.oldName || !res.newName) {
+        return res.error ?? 'Could not rename subfolder.';
+      }
+      const saved = await saveCategoryConfigs(res.configs);
+      setCategoryConfigs(saved);
+      const catName = res.categoryName;
+      const oldSub = res.oldName;
+      const nextSub = res.newName;
+      if (activeCategory === catName && activeSubfolder === oldSub) {
+        setActiveSubfolder(nextSub);
+      }
+      await propagateNotesCategoryChange(
+        (n) =>
+          n.category.toLowerCase() === catName.toLowerCase() &&
+          (n.subfolder ?? '').toLowerCase() === oldSub.toLowerCase(),
+        (n) => ({
+          category: n.category,
+          subfolder: nextSub,
+        }),
+      );
+      return null;
+    },
+    [
+      activeCategory,
+      activeSubfolder,
+      categoryConfigs,
+      propagateNotesCategoryChange,
+    ],
+  );
+
+  const handleDeleteSubfolder = useCallback(
+    async (categoryId: string, subfolderName: string): Promise<void> => {
+      const res = deleteSubfolderInCategory(
+        categoryConfigs,
+        categoryId,
+        subfolderName,
+      );
+      const saved = await saveCategoryConfigs(res.configs);
+      setCategoryConfigs(saved);
+      if (
+        res.categoryName &&
+        activeCategory === res.categoryName &&
+        activeSubfolder === subfolderName
+      ) {
+        setActiveSubfolder('All');
+      }
+      if (res.categoryName) {
+        const catName = res.categoryName;
+        await propagateNotesCategoryChange(
+          (n) =>
+            n.category.toLowerCase() === catName.toLowerCase() &&
+            (n.subfolder ?? '').toLowerCase() === subfolderName.toLowerCase(),
+          (n) => ({
+            category: n.category,
+            subfolder: null,
+          }),
+        );
+      }
+    },
+    [
+      activeCategory,
+      activeSubfolder,
+      categoryConfigs,
+      propagateNotesCategoryChange,
+    ],
+  );
+
+  const handleResetCategoryDefaults = useCallback(async () => {
+    const saved = await saveCategoryConfigs(getDefaultCategoryConfigs());
+    setCategoryConfigs(saved);
+    setActiveCategory('All');
+    setActiveSubfolder('All');
+  }, []);
+
   const handleResetFilters = () => {
     setActiveCategory('All');
+    setActiveSubfolder('All');
     setSearchQuery('');
   };
 
@@ -989,6 +1562,7 @@ export default function App() {
 
   const handleUpdateVoiceSettings = useCallback(
     async (patch: Partial<VoiceSearchSettings>) => {
+      const prevModelId = voiceSettingsRef.current.whisperModelId;
       const merged: VoiceSearchSettings = {
         ...voiceSettingsRef.current,
         ...patch,
@@ -996,12 +1570,17 @@ export default function App() {
       if (!merged.experimentalVoiceEnabled) {
         merged.wakeWordEnabled = false;
       }
+      if (patch.whisperModelId && patch.whisperModelId !== prevModelId) {
+        cancelWhisperWork();
+      }
       const saved = await saveVoiceSearchSettings(merged);
       setVoiceSettings(saved);
       voiceSettingsRef.current = saved;
       setVoiceRuntime((prev) => ({
         ...prev,
         phase: saved.experimentalVoiceEnabled ? 'idle' : 'off',
+        micReady: false,
+        micLevel: 0,
         lastError: null,
       }));
     },
@@ -1043,107 +1622,220 @@ export default function App() {
     }
   }, []);
 
-  const handleStartPushToTalk = useCallback(async () => {
-    if (!voiceSettingsRef.current.experimentalVoiceEnabled) {
-      return;
-    }
-    if (activeCaptureRef.current) {
-      return;
-    }
-    setVoiceRuntime((prev) => ({
-      ...prev,
-      phase: 'listening',
-      lastError: null,
-    }));
-    try {
-      const handle = await startEphemeralMicCapture();
-      activeCaptureRef.current = handle;
-      const perm = await queryMicrophonePermissionState();
-      setVoiceRuntime((prev) => ({...prev, micPermissionState: perm}));
-    } catch (err) {
-      activeCaptureRef.current = null;
-      hotkeyHeldRef.current = false;
+  const transcribeCapturedHandle = useCallback(
+    async (handle: EphemeralCaptureHandle) => {
       setVoiceRuntime((prev) => ({
         ...prev,
-        phase: 'error',
-        lastError:
-          (err as Error).message || 'Microphone permission denied or unavailable.',
+        phase: 'transcribing',
+        micReady: false,
+        micLevel: 0,
       }));
-    }
-  }, []);
+      let samples16k: Float32Array | null = null;
+      try {
+        samples16k = await handle.stopAndExtract16k();
+        if (samples16k.length < 1600) {
+          setVoiceRuntime((prev) => ({
+            ...prev,
+            phase: voiceSettingsRef.current.experimentalVoiceEnabled
+              ? 'idle'
+              : 'off',
+            micReady: false,
+            micLevel: 0,
+            lastError: 'Speak a bit longer after the mic opens.',
+          }));
+          return;
+        }
 
-  const handleStopPushToTalk = useCallback(async () => {
-    const handle = activeCaptureRef.current;
-    hotkeyHeldRef.current = false;
-    if (!handle) {
-      setVoiceRuntime((prev) => ({
-        ...prev,
-        phase: voiceSettingsRef.current.experimentalVoiceEnabled ? 'idle' : 'off',
-      }));
-      return;
-    }
-    activeCaptureRef.current = null;
+        const transcript = await transcribeEphemeralAudio({
+          samples16k,
+          modelId: voiceSettingsRef.current.whisperModelId,
+        });
 
-    setVoiceRuntime((prev) => ({...prev, phase: 'transcribing'}));
-    let samples16k: Float32Array | null = null;
-    try {
-      samples16k = await handle.stopAndExtract16k();
-      if (samples16k.length < 1600) {
+        if (!voiceSettingsRef.current.whisperDownloaded) {
+          const saved = await saveVoiceSearchSettings({
+            ...voiceSettingsRef.current,
+            whisperDownloaded: true,
+          });
+          setVoiceSettings(saved);
+          voiceSettingsRef.current = saved;
+        }
+
+        if (transcript) {
+          await applyTranscriptToSemanticSearch(transcript);
+        } else {
+          setVoiceRuntime((prev) => ({
+            ...prev,
+            lastError:
+              'No speech detected — check your mic or speak a little louder.',
+          }));
+        }
         setVoiceRuntime((prev) => ({
           ...prev,
           phase: voiceSettingsRef.current.experimentalVoiceEnabled
             ? 'idle'
             : 'off',
-          lastError: 'Hold push-to-talk slightly longer while speaking.',
+          micReady: false,
+          micLevel: 0,
+        }));
+      } catch (err) {
+        setVoiceRuntime((prev) => ({
+          ...prev,
+          phase: voiceSettingsRef.current.experimentalVoiceEnabled
+            ? 'error'
+            : 'off',
+          micReady: false,
+          micLevel: 0,
+          lastError:
+            (err as Error).message || 'Local Whisper transcription failed.',
+        }));
+      } finally {
+        if (samples16k) {
+          samples16k.fill(0);
+        }
+      }
+    },
+    [applyTranscriptToSemanticSearch],
+  );
+
+  const beginMicCapture = useCallback(async () => {
+    if (activeCaptureRef.current || captureStartingRef.current) {
+      return;
+    }
+    captureStartingRef.current = true;
+    stopDuringStartActionRef.current = 'none';
+    setVoiceRuntime((prev) => ({
+      ...prev,
+      phase: 'listening',
+      micReady: false,
+      micLevel: 0,
+      lastError: null,
+    }));
+    try {
+      let lastLevelEmit = 0;
+      const handle = await startEphemeralMicCapture({
+        onInputLevel: (level) => {
+          const now = performance.now();
+          if (now - lastLevelEmit < 70) {
+            return;
+          }
+          lastLevelEmit = now;
+          setVoiceRuntime((prev) =>
+            prev.phase === 'listening'
+              ? {...prev, micReady: true, micLevel: level}
+              : prev,
+          );
+        },
+      });
+      captureStartingRef.current = false;
+
+      const getPendingStopAction = (): 'none' | 'transcribe' | 'cancel' =>
+        stopDuringStartActionRef.current;
+      const pendingAction = getPendingStopAction();
+      stopDuringStartActionRef.current = 'none';
+      if (pendingAction === 'cancel') {
+        await handle.discard();
+        setVoiceRuntime((prev) => ({
+          ...prev,
+          phase: voiceSettingsRef.current.experimentalVoiceEnabled
+            ? 'idle'
+            : 'off',
+          micReady: false,
+          micLevel: 0,
         }));
         return;
       }
-
-      const transcript = await transcribeEphemeralAudio({
-        samples16k,
-        modelId: voiceSettingsRef.current.whisperModelId,
-      });
-
-      if (!voiceSettingsRef.current.whisperDownloaded) {
-        const saved = await saveVoiceSearchSettings({
-          ...voiceSettingsRef.current,
-          whisperDownloaded: true,
-        });
-        setVoiceSettings(saved);
-        voiceSettingsRef.current = saved;
+      if (pendingAction === 'transcribe') {
+        await transcribeCapturedHandle(handle);
+        return;
       }
 
-      if (transcript) {
-        await applyTranscriptToSemanticSearch(transcript);
-      } else {
-        setVoiceRuntime((prev) => ({
-          ...prev,
-          lastError: 'No speech detected in audio.',
-        }));
-      }
+      activeCaptureRef.current = handle;
+      const perm = await queryMicrophonePermissionState();
       setVoiceRuntime((prev) => ({
         ...prev,
-        phase: voiceSettingsRef.current.experimentalVoiceEnabled
-          ? 'idle'
-          : 'off',
+        micPermissionState: perm,
+        micReady: prev.phase === 'listening' ? true : prev.micReady,
       }));
     } catch (err) {
+      captureStartingRef.current = false;
+      stopDuringStartActionRef.current = 'none';
+      activeCaptureRef.current = null;
+      hotkeyHeldRef.current = false;
       setVoiceRuntime((prev) => ({
         ...prev,
-        phase: voiceSettingsRef.current.experimentalVoiceEnabled
-          ? 'error'
-          : 'off',
-        lastError: (err as Error).message || 'Local Whisper transcription failed.',
+        phase: 'error',
+        micReady: false,
+        micLevel: 0,
+        lastError:
+          (err as Error).message || 'Microphone permission denied or unavailable.',
       }));
-    } finally {
-      if (samples16k) {
-        samples16k.fill(0);
-      }
     }
-  }, [applyTranscriptToSemanticSearch]);
+  }, [transcribeCapturedHandle]);
+
+  const handleActivateAndStartMic = useCallback(async () => {
+    if (!voiceSettingsRef.current.experimentalVoiceEnabled) {
+      const saved = await saveVoiceSearchSettings({
+        ...voiceSettingsRef.current,
+        experimentalVoiceEnabled: true,
+      });
+      setVoiceSettings(saved);
+      voiceSettingsRef.current = saved;
+    }
+    await beginMicCapture();
+  }, [beginMicCapture]);
+
+  const handleStartPushToTalk = useCallback(async () => {
+    if (!voiceSettingsRef.current.experimentalVoiceEnabled) {
+      return;
+    }
+    await beginMicCapture();
+  }, [beginMicCapture]);
+
+  const handleStopPushToTalk = useCallback(async () => {
+    hotkeyHeldRef.current = false;
+    if (captureStartingRef.current) {
+      stopDuringStartActionRef.current = 'transcribe';
+      return;
+    }
+    const handle = activeCaptureRef.current;
+    if (!handle) {
+      setVoiceRuntime((prev) => ({
+        ...prev,
+        phase: voiceSettingsRef.current.experimentalVoiceEnabled ? 'idle' : 'off',
+        micReady: false,
+        micLevel: 0,
+      }));
+      return;
+    }
+    activeCaptureRef.current = null;
+    await transcribeCapturedHandle(handle);
+  }, [transcribeCapturedHandle]);
+
+  const handleCancelVoiceCapture = useCallback(async () => {
+    hotkeyHeldRef.current = false;
+    if (captureStartingRef.current) {
+      stopDuringStartActionRef.current = 'cancel';
+    }
+    if (activeCaptureRef.current) {
+      const cap = activeCaptureRef.current;
+      activeCaptureRef.current = null;
+      await cap.discard().catch(() => undefined);
+    }
+    cancelWhisperWork();
+    setVoiceRuntime((prev) => ({
+      ...prev,
+      phase: voiceSettingsRef.current.experimentalVoiceEnabled ? 'idle' : 'off',
+      micReady: false,
+      micLevel: 0,
+      lastError: null,
+    }));
+  }, []);
 
   const handleMasterKillSwitch = useCallback(async (): Promise<KillSwitchReport> => {
     hotkeyHeldRef.current = false;
+    if (captureStartingRef.current) {
+      stopDuringStartActionRef.current = 'cancel';
+    }
     if (activeCaptureRef.current) {
       const cap = activeCaptureRef.current;
       activeCaptureRef.current = null;
@@ -1168,6 +1860,8 @@ export default function App() {
       micPermissionState: report.permissionState,
       wakeWordActive: false,
       wakeWordStatusMessage: 'Stopped by Master Kill Switch',
+      micReady: false,
+      micLevel: 0,
       lastError: null,
     }));
     return report;
@@ -1507,7 +2201,11 @@ export default function App() {
           folderName={folderName}
           errorMessage={pickerError}
           busy={workspaceBusy}
-          onSelectFolder={handleSelectFolder}
+          reconnectRequiresPicker={reconnectRequiresPicker}
+          onSelectFolder={() => void handleSelectFolder()}
+          onImportReadOnlyFolder={(files) =>
+            void handleImportReadOnlyFolder(files)
+          }
           onReconnect={handleReconnect}
           onForgetWorkspace={handleForgetWorkspace}
           onNavigate={navigate}
@@ -1597,6 +2295,8 @@ export default function App() {
               ) : route === '/workspace' && selectedEntry ? (
                 <NoteEditorView
                   entry={selectedEntry}
+                  allNotes={notes}
+                  categoryConfigs={categoryConfigs}
                   targetBlockId={targetBlockId}
                   reloadVersion={reloadVersion}
                   externalConflict={
@@ -1620,6 +2320,20 @@ export default function App() {
                   }
                   onRemoveBacklink={(id) => void handleRemoveBacklink(id)}
                   onNavigateToBlock={handleNavigateToBlock}
+                  onSelectNote={(target) => {
+                    setExternalConflict(null);
+                    setSelectedSourceDoc(null);
+                    setTargetBlockId(null);
+                    setSelectedEntry(target);
+                  }}
+                  onCreateNoteInFolder={(cat, sub) => {
+                    setActiveCategory(cat);
+                    setActiveSubfolder(sub || 'All');
+                    setNewNotePrefill(null);
+                    setNewNoteOpen(true);
+                  }}
+                  onOpenCategoryManager={() => setCategoryManagerOpen(true)}
+                  onQuickAddSubfolder={handleQuickAddSubfolderByName}
                   onBack={() => {
                     setExternalConflict(null);
                     setSelectedEntry(null);
@@ -1635,7 +2349,9 @@ export default function App() {
                   problems={scanProblems}
                   scanning={scanning}
                   activePillar={activePillar}
+                  categoryConfigs={categoryConfigs}
                   activeCategory={activeCategory}
+                  activeSubfolder={activeSubfolder}
                   searchQuery={searchQuery}
                   localSearchQuery={localSearchQuery}
                   searching={searching}
@@ -1647,14 +2363,21 @@ export default function App() {
                   voiceSettings={voiceSettings}
                   voiceRuntime={voiceRuntime}
                   whisperProgress={whisperProgress}
+                  onActivateAndStartMic={() => void handleActivateAndStartMic()}
                   onStartPushToTalk={() => void handleStartPushToTalk()}
                   onStopPushToTalk={() => void handleStopPushToTalk()}
+                  onCancelVoiceCapture={() => void handleCancelVoiceCapture()}
                   onMasterKillSwitch={() => void handleMasterKillSwitch()}
                   onNavigate={navigate}
                   connectionState={connectionState}
                   folderName={folderName}
+                  workspaceError={pickerError}
+                  reconnectRequiresPicker={reconnectRequiresPicker}
                   busy={workspaceBusy}
                   onSelectCategory={setActiveCategory}
+                  onSelectSubfolder={setActiveSubfolder}
+                  onOpenCategoryManager={() => setCategoryManagerOpen(true)}
+                  onQuickAddSubfolder={handleQuickAddSubfolderByName}
                   onSearchChange={setSearchQuery}
                   onLocalSearchChange={setLocalSearchQuery}
                   onResetFilters={handleResetFilters}
@@ -1684,8 +2407,9 @@ export default function App() {
                   onImportMarkdown={handleImportMarkdown}
                   onImportDemoPdf={handleImportDemoPdf}
                   onReconnect={handleReconnect}
+                  onForgetWorkspace={handleForgetWorkspace}
                   onRescan={() => void runWorkspaceScan('manual', {force: true})}
-                  onSelectFolder={handleSelectFolder}
+                  onSelectFolder={() => void handleSelectFolder()}
                 />
               ) : null}
               {route === '/workspace/study' && (
@@ -1715,13 +2439,22 @@ export default function App() {
                   aiEnabled={aiEnabled}
                   onNavigate={navigate}
                   onNavigateToBlock={handleNavigateToBlock}
-                  onOpenNewNote={() => setNewNoteOpen(true)}
+                  onOpenNewNote={(initialTitle, initialBody) => {
+                    setNewNotePrefill(
+                      initialTitle || initialBody
+                        ? {title: initialTitle ?? '', body: initialBody ?? ''}
+                        : null,
+                    );
+                    setNewNoteOpen(true);
+                  }}
                   onOpenKeySetup={() => setKeySetupOpen(true)}
                 />
               )}
               {route === '/workspace/organize' && (
                 <OrganizePage
                   notes={notes}
+                  isConnected={connectionState === 'connected'}
+                  onApplyDemoMoves={handleApplyDemoMoves}
                   onRefreshWorkspace={async () => {
                     await runWorkspaceScan('manual', {force: true});
                   }}
@@ -1766,6 +2499,7 @@ export default function App() {
 
           <MiniNotebook
             open={miniNotebookOpen}
+            categoryConfigs={categoryConfigs}
             onClose={() => setMiniNotebookOpen(false)}
             onSaveToManual={handleCreateManualNote}
           />
@@ -1773,8 +2507,30 @@ export default function App() {
           <NewNoteModal
             open={newNoteOpen}
             isPersisted={connectionState === 'connected'}
-            onClose={() => setNewNoteOpen(false)}
+            categoryConfigs={categoryConfigs}
+            defaultCategory={activeCategory}
+            defaultSubfolder={activeSubfolder}
+            initialTitle={newNotePrefill?.title ?? ''}
+            initialBody={newNotePrefill?.body ?? ''}
+            onClose={() => {
+              setNewNoteOpen(false);
+              setNewNotePrefill(null);
+            }}
             onCreate={handleCreateManualNote}
+          />
+
+          <CategoryManagerModal
+            open={categoryManagerOpen}
+            categoryConfigs={categoryConfigs}
+            onClose={() => setCategoryManagerOpen(false)}
+            onAddCategory={handleAddCategory}
+            onRenameCategory={handleRenameCategory}
+            onChangeCategoryColor={handleChangeCategoryColor}
+            onDeleteCategory={handleDeleteCategory}
+            onAddSubfolder={handleAddSubfolder}
+            onRenameSubfolder={handleRenameSubfolder}
+            onDeleteSubfolder={handleDeleteSubfolder}
+            onResetDefaults={handleResetCategoryDefaults}
           />
 
           <KeySetupModal
@@ -1788,15 +2544,62 @@ export default function App() {
         open={pendingInit !== null}
         folderName={pendingInit?.inspection.folderName ?? ''}
         entryCount={pendingInit?.inspection.entryCount ?? 0}
+        looksLikeCodeProject={
+          pendingInit?.inspection.looksLikeCodeProject ?? false
+        }
+        projectMarkerNames={pendingInit?.inspection.projectMarkerNames ?? []}
+        looksLikeDirectManualSubfolder={
+          pendingInit?.inspection.looksLikeDirectManualSubfolder ?? false
+        }
+        directManualNotesCount={
+          pendingInit?.inspection.directManualNotesCount ?? 0
+        }
+        rootMarkdownOrTextCount={
+          pendingInit?.inspection.rootMarkdownOrTextCount ?? 0
+        }
         onCancel={() => {
           setPendingInit(null);
           setConnectionState(
-            restoredHandle ? 'restored-needs-permission' : 'unselected',
+            hasActiveWorkspace()
+              ? 'connected'
+              : restoredHandle
+                ? 'restored-needs-permission'
+                : 'unselected',
           );
+        }}
+        onChooseDifferent={() => {
+          setPendingInit(null);
+          setConnectionState(
+            hasActiveWorkspace()
+              ? 'connected'
+              : restoredHandle
+                ? 'restored-needs-permission'
+                : 'unselected',
+          );
+          void handleSelectFolder();
         }}
         onConfirm={async () => {
           if (pendingInit) {
-            await finalizeFolderConnection(pendingInit.handle);
+            try {
+              await finalizeFolderConnection(pendingInit.handle, {
+                directManualRoot:
+                  pendingInit.inspection.looksLikeDirectManualSubfolder,
+              });
+            } catch (err) {
+              setPendingInit(null);
+              setConnectionState(
+                hasActiveWorkspace()
+                  ? 'connected'
+                  : restoredHandle
+                    ? 'restored-needs-permission'
+                    : 'unselected',
+              );
+              setPickerError(
+                err instanceof Error
+                  ? err.message
+                  : 'Unable to open selected folder.',
+              );
+            }
           }
         }}
       />

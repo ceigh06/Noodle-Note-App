@@ -36,7 +36,7 @@ function CitationLinkChip({
   const target = sources.find((s) => s.citationNumber === citationNumber);
   if (!target || !onNavigateToBlock) {
     return (
-      <span className="font-mono text-[11px] font-semibold text-[#E0A83E] tabular-nums">
+      <span className="text-[11px] font-semibold text-[#E0A83E] tabular-nums">
         [{citationNumber}]
       </span>
     );
@@ -48,7 +48,7 @@ function CitationLinkChip({
         onNavigateToBlock(target.noteId, target.blockId, target.kind)
       }
       title={`Open "${target.title}" block ${target.blockId.slice(0, 12)}`}
-      className="inline-flex items-center gap-0.5 rounded border border-[#E0A83E]/40 bg-[#E0A83E]/12 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-[#F4D084] tabular-nums transition-colors hover:bg-[#E0A83E]/25"
+      className="inline-flex items-center gap-0.5 rounded bg-[#232018] px-1.5 py-0.5 text-[11px] font-semibold text-[#F4D084] tabular-nums transition-colors hover:bg-[#322B1E]"
     >
       <span>[{citationNumber}]</span>
       <ArrowUpRight className="h-3 w-3" />
@@ -89,24 +89,24 @@ export function AiProvenanceBanner({
   return (
     <section
       aria-label="AI Generated Output Metadata"
-      className="space-y-3 rounded-xl border border-violet-400/35 bg-[#161523] p-4 text-xs"
+      className="space-y-3 rounded-xl border border-[#343054] bg-[#161523] p-4 text-xs"
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-violet-400/20 pb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
         <div className="flex flex-wrap items-center gap-2">
           <Sparkles className="h-4 w-4 text-violet-300" />
           <span className="font-semibold text-violet-200">
-            AI Output · {formatLabel}
+            AI Note · {formatLabel}
           </span>
           <span aria-hidden="true" className="text-[#6F7689]">
             ·
           </span>
-          <span className="font-mono text-[11px] text-[#C8CCD6]">
+          <span className="text-xs text-[#C8CCD6]">
             {providerLabel} ({aiMeta.model})
           </span>
           <span aria-hidden="true" className="text-[#6F7689]">
             ·
           </span>
-          <span className="text-[11px] text-[#9CA1AE] tabular-nums">
+          <span className="text-xs text-[#9CA1AE] tabular-nums">
             {dateLabel}
           </span>
         </div>
@@ -119,7 +119,7 @@ export function AiProvenanceBanner({
       {aiMeta.preservedPhrases && aiMeta.preservedPhrases.length > 0 && (
         <div className="space-y-1">
           <p className="text-[11px] font-medium text-[#A8B0C2]">
-            Retained phrasing, examples &amp; structural metaphors
+            Your phrasing &amp; examples kept
           </p>
           <p className="text-xs leading-relaxed text-[#E5E2D9]">
             {aiMeta.preservedPhrases.map((p) => `“${p}”`).join(' · ')}
@@ -130,7 +130,7 @@ export function AiProvenanceBanner({
       {aiMeta.sourcesUsed.length > 0 && (
         <div className="space-y-1.5">
           <p className="text-[11px] font-medium text-[#A8B0C2] tabular-nums">
-            Sources used ({aiMeta.sourcesUsed.length} retrieved excerpts · read-only block links)
+            Sources used ({aiMeta.sourcesUsed.length})
           </p>
           <div className="flex flex-wrap gap-2">
             {aiMeta.sourcesUsed.map((src) => (
@@ -141,9 +141,9 @@ export function AiProvenanceBanner({
                 onClick={() =>
                   onNavigateToBlock?.(src.noteId, src.blockId, src.kind)
                 }
-                className="inline-flex items-center gap-1.5 rounded-md border border-[#2C3142] bg-[#11131C] px-2.5 py-1 text-[11px] text-[#D7D9E2] transition-colors hover:border-[#E0A83E]/55 hover:text-[#F6DFA8] disabled:cursor-default"
+                className="inline-flex h-7 items-center gap-1.5 rounded-md bg-[#11131C] px-2.5 text-[11px] text-[#D7D9E2] transition-colors hover:bg-[#1C202B] hover:text-[#F6DFA8] disabled:cursor-default"
               >
-                <span className="font-mono font-semibold text-[#E0A83E] tabular-nums">
+                <span className="font-semibold text-[#E0A83E] tabular-nums">
                   [{src.citationNumber}]
                 </span>
                 <span className="max-w-[200px] truncate">{src.title}</span>
@@ -215,18 +215,18 @@ export function FlashcardDeckView({
           <h3 className="font-serif text-base font-semibold text-[#F5F1E8]">
             Interactive Flashcard Deck
           </h3>
-          <span className="font-mono text-[11px] text-[#8E95A5] tabular-nums">
+          <span className="text-xs text-[#8E95A5] tabular-nums">
             · Card {safeIndex + 1} of {flashcards.length}
           </span>
         </div>
 
-        <span className="font-mono text-[11px] text-emerald-300 tabular-nums">
+        <span className="text-xs font-medium text-emerald-300 tabular-nums">
           Mastered {masteredIds.size}/{flashcards.length}
         </span>
       </div>
 
       {/* Card Surface */}
-      <div className="space-y-4 rounded-xl border border-[#2B3040] bg-[#0F1117] p-6">
+      <div className="space-y-3 rounded-xl bg-[#0F1117] p-5">
         <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
           <span className="font-medium text-[#8E95A5]">
             {flipped ? 'Answer (Back)' : 'Prompt (Front)'}
@@ -251,7 +251,7 @@ export function FlashcardDeckView({
         <button
           type="button"
           onClick={() => setFlipped((prev) => !prev)}
-          className="flex min-h-[140px] w-full flex-col items-center justify-center rounded-lg border border-[#232734] bg-[#141720] px-6 py-6 text-center transition-colors hover:border-[#E0A83E]/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60"
+          className="flex min-h-[140px] w-full flex-col items-center justify-center rounded-lg bg-[#141720] px-6 py-6 text-center transition-colors hover:bg-[#191D28] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60"
         >
           <p className="max-w-2xl font-serif text-lg leading-relaxed text-[#F5F1E8]">
             {flipped ? card.back : card.front}
@@ -315,8 +315,8 @@ export function FlashcardDeckView({
           onClick={toggleMastered}
           className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors ${
             isMastered
-              ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
-              : 'border-[#282D3B] bg-[#161922] text-[#9CA1AE] hover:border-emerald-500/40 hover:text-emerald-200'
+              ? 'border-[#264D3E] bg-[#121D19] text-emerald-300'
+              : 'border-[#282D3B] bg-[#161922] text-[#9CA1AE] hover:border-[#264D3E] hover:text-emerald-200'
           }`}
         >
           <CheckCircle2 className="h-3.5 w-3.5" />
@@ -366,7 +366,7 @@ export function PracticeExamView({
       aria-label="Interactive Practice Exam"
       className="space-y-4 rounded-xl border border-[#282D3B] bg-[#13161E] p-5"
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#202430] pb-3 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-1 text-xs">
         <div className="space-y-0.5">
           <h3 className="font-serif text-base font-semibold text-[#F5F1E8]">
             Interactive Practice Exam
@@ -400,7 +400,7 @@ export function PracticeExamView({
         </div>
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         {questions.map((q, qIdx) => {
           const picked = selectedAnswers[q.id];
           const isCorrect = submitted && picked === q.correctIndex;
@@ -410,11 +410,11 @@ export function PracticeExamView({
           return (
             <div
               key={q.id}
-              className="space-y-3 rounded-xl border border-[#232734] bg-[#0F1117] p-4 text-xs"
+              className="space-y-3 rounded-xl bg-[#0F1117] p-4 text-xs"
             >
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <p className="font-serif text-sm font-semibold text-[#F2EEE4]">
-                  <span className="mr-2 font-mono text-xs text-[#E0A83E] tabular-nums">
+                  <span className="mr-2 text-xs font-semibold text-[#E0A83E] tabular-nums">
                     Q{qIdx + 1}.
                   </span>
                   {q.prompt}
@@ -451,18 +451,18 @@ export function PracticeExamView({
                           [q.id]: optIdx,
                         }))
                       }
-                      className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3.5 py-2.5 text-left transition-colors ${
+                      className={`flex w-full items-center justify-between gap-3 rounded-lg px-3.5 py-2.5 text-left transition-colors ${
                         showCorrect
-                          ? 'border-emerald-500/55 bg-emerald-500/12 text-emerald-200'
+                          ? 'border-l-2 border-emerald-400 bg-[#121D19] text-emerald-200'
                           : showWrong
-                            ? 'border-rose-500/55 bg-rose-500/12 text-rose-200'
+                            ? 'border-l-2 border-rose-400 bg-[#201318] text-rose-200'
                             : isSelected
-                              ? 'border-[#E0A83E]/65 bg-[#E0A83E]/12 text-[#F6DFA8]'
-                              : 'border-[#232734] bg-[#141720] text-[#D2D5DF] hover:border-[#383F52]'
+                              ? 'border-l-2 border-[#E0A83E] bg-[#1C1A15] text-[#F6DFA8]'
+                              : 'bg-[#141720] text-[#D2D5DF] hover:bg-[#191D28]'
                       }`}
                     >
                       <span>
-                        <span className="mr-2 font-mono text-[11px] text-[#8E95A5]">
+                        <span className="mr-2 text-xs font-medium text-[#8E95A5]">
                           {String.fromCharCode(65 + optIdx)}.
                         </span>
                         {opt}
@@ -480,12 +480,12 @@ export function PracticeExamView({
 
               {submitted && (
                 <div
-                  className={`rounded-lg border px-3.5 py-2.5 text-xs ${
+                  className={`rounded-lg px-3.5 py-2.5 text-xs ${
                     isCorrect
-                      ? 'border-emerald-500/35 bg-emerald-500/8 text-emerald-200'
+                      ? 'bg-[#121D19] text-emerald-200'
                       : isWrong
-                        ? 'border-rose-500/35 bg-rose-500/8 text-rose-200'
-                        : 'border-[#282D3B] bg-[#141720] text-[#C8CCD6]'
+                        ? 'bg-[#201318] text-rose-200'
+                        : 'bg-[#141720] text-[#C8CCD6]'
                   }`}
                 >
                   <span className="font-semibold">

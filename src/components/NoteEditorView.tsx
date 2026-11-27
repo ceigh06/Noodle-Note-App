@@ -23,8 +23,12 @@ import {
   Bold,
   Check,
   CheckSquare,
+  ChevronRight,
   Code2,
   Download,
+  FileText,
+  Folder,
+  FolderPlus,
   Image as ImageIcon,
   Italic,
   Link2,
@@ -32,9 +36,11 @@ import {
   ListOrdered,
   Lock,
   Minus,
+  Plus,
   Quote,
   Redo2,
   RemoveFormatting,
+  SlidersHorizontal,
   Sparkles,
   Strikethrough,
   Table as TableIcon,
@@ -54,18 +60,23 @@ import {
   shouldScheduleAutosave,
 } from '../editor/noteSchema';
 import {
+  getCategoryStyle,
+  getDefaultCategoryConfigs,
+  getSubfoldersForCategory,
+  sanitizeCategoryLabel,
+} from '../storage/categoryConfig';
+import {
   importImageAsset,
   previewOrphanAssetsForNoteDelete,
 } from '../storage/workspaceStorage';
 import {
   BacklinkRecord,
-  CATEGORIES,
-  CATEGORY_STYLE,
   Category,
   ExternalEditConflict,
   StoredNoteEntry,
   SuggestedConnection,
   TipTapDoc,
+  UserCategoryConfig,
 } from '../types/noodle';
 import {
   AiProvenanceBanner,
@@ -88,6 +99,8 @@ const WorkspaceImage = Image.extend({
 
 interface NoteEditorViewProps {
   entry: StoredNoteEntry;
+  allNotes?: StoredNoteEntry[];
+  categoryConfigs?: UserCategoryConfig[];
   targetBlockId?: string | null;
   reloadVersion?: number;
   externalConflict?: ExternalEditConflict | null;
@@ -110,10 +123,19 @@ interface NoteEditorViewProps {
     blockId: string,
     kind: 'note' | 'source',
   ) => void;
+  onSelectNote?: (entry: StoredNoteEntry) => void;
+  onCreateNoteInFolder?: (category: Category, subfolder?: string) => void;
+  onOpenCategoryManager?: () => void;
+  onQuickAddSubfolder?: (categoryName: string, subfolderName: string) => Promise<void> | void;
   onBack: () => void;
   onSaveNote: (
     entry: StoredNoteEntry,
-    patch: {title: string; category: Category; content: TipTapDoc},
+    patch: {
+      title: string;
+      category: Category;
+      subfolder?: string | null;
+      content: TipTapDoc;
+    },
   ) => Promise<StoredNoteEntry>;
   onDeleteNote: (
     entry: StoredNoteEntry,
@@ -125,6 +147,8 @@ type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 export function NoteEditorView({
   entry,
+  allNotes = [],
+  categoryConfigs: providedCategoryConfigs,
   targetBlockId = null,
   reloadVersion = 0,
   externalConflict = null,
@@ -140,15 +164,31 @@ export function NoteEditorView({
   onDismissSuggestion,
   onRemoveBacklink,
   onNavigateToBlock,
+  onSelectNote,
+  onCreateNoteInFolder,
+  onOpenCategoryManager,
+  onQuickAddSubfolder,
   onBack,
   onSaveNote,
   onDeleteNote,
 }: NoteEditorViewProps) {
+  const categoryConfigs = providedCategoryConfigs ?? getDefaultCategoryConfigs();
   const isImmutable = entry.pillar === 'sources';
   const editable = !isImmutable;
 
   const [title, setTitle] = useState(entry.note.title);
   const [category, setCategory] = useState<Category>(entry.note.category);
+  const [subfolder, setSubfolder] = useState<string>(entry.note.subfolder ?? '');
+  const [folderPanelOpen, setFolderPanelOpen] = useState(true);
+  const [browseCategory, setBrowseCategory] = useState<string | null>(
+    entry.note.category || null,
+  );
+  const [browseSubfolder, setBrowseSubfolder] = useState<string | null>(
+    entry.note.subfolder || null,
+  );
+  const [addingSubfolder, setAddingSubfolder] = useState(false);
+  const [newSubDraft, setNewSubDraft] = useState('');
+  const [movedNotice, setMovedNotice] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
@@ -176,13 +216,16 @@ export function NoteEditorView({
   const entryRef = useRef(entry);
   const titleRef = useRef(entry.note.title);
   const categoryRef = useRef<Category>(entry.note.category);
+  const subfolderRef = useRef<string>(entry.note.subfolder ?? '');
   const titleManualRef = useRef(
     entry.note.title.trim() !== '' && entry.note.title !== 'Untitled Note',
   );
   const isHydratingRef = useRef(true);
   const lastSavedCanonicalRef = useRef(canonicalStringify(entry.note.content));
   const debounceTimerRef = useRef<number | null>(null);
+  const movedTimerRef = useRef<number | null>(null);
   const dirtyRef = useRef(false);
+  const latestDocRef = useRef<TipTapDoc>(entry.note.content);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const proseContainerRef = useRef<HTMLDivElement | null>(null);
   const externalConflictRef = useRef<ExternalEditConflict | null>(externalConflict);
@@ -209,7 +252,12 @@ export function NoteEditorView({
   }, [clearPendingTimer, externalConflict]);
 
   const performSave = useCallback(
-    async (nextTitle: string, nextCategory: Category, nextContent: TipTapDoc) => {
+    async (
+      nextTitle: string,
+      nextCategory: Category,
+      nextSubfolder: string,
+      nextContent: TipTapDoc,
+    ) => {
       if (isImmutable) {
         return;
       }
@@ -217,9 +265,11 @@ export function NoteEditorView({
       setSaveError(null);
       try {
         const sanitizedDoc = ensureBlockIds(nextContent);
+        const cleanSub = sanitizeCategoryLabel(nextSubfolder);
         const saved = await onSaveNote(entryRef.current, {
           title: nextTitle.trim() || 'Untitled Note',
           category: nextCategory,
+          subfolder: cleanSub || null,
           content: sanitizedDoc,
         });
         entryRef.current = saved;
@@ -251,7 +301,12 @@ export function NoteEditorView({
         if (externalConflictRef.current) {
           return;
         }
-        void performSave(titleRef.current, categoryRef.current, nextContent);
+        void performSave(
+          titleRef.current,
+          categoryRef.current,
+          subfolderRef.current,
+          nextContent,
+        );
       }, 1000);
     },
     [clearPendingTimer, isImmutable, performSave],
@@ -345,6 +400,7 @@ export function NoteEditorView({
       },
       onUpdate: ({editor: ed, transaction}) => {
         const nextDoc = ed.getJSON() as TipTapDoc;
+        latestDocRef.current = nextDoc;
         const nextCanonical = canonicalStringify(nextDoc);
         const isUniqueIdInit = Boolean(
           transaction.getMeta('__uniqueIDTransaction'),
@@ -385,11 +441,19 @@ export function NoteEditorView({
     dirtyRef.current = false;
     titleRef.current = entry.note.title;
     categoryRef.current = entry.note.category;
+    subfolderRef.current = entry.note.subfolder ?? '';
+    latestDocRef.current = entry.note.content;
     titleManualRef.current =
       entry.note.title.trim() !== '' && entry.note.title !== 'Untitled Note';
     lastSavedCanonicalRef.current = canonicalStringify(entry.note.content);
     setTitle(entry.note.title);
     setCategory(entry.note.category);
+    setSubfolder(entry.note.subfolder ?? '');
+    setBrowseCategory(entry.note.category || null);
+    setBrowseSubfolder(entry.note.subfolder || null);
+    setAddingSubfolder(false);
+    setNewSubDraft('');
+    setMovedNotice(null);
     setSaveStatus('idle');
     setSaveError(null);
     setImageError(null);
@@ -502,12 +566,27 @@ export function NoteEditorView({
     handleInsertImagesRef.current = handleInsertImages;
   }, [handleInsertImages]);
 
-  // Cleanup timer on unmount
+  // Flush pending edits/moves on unmount so sidebar navigation never drops changes
   useEffect(() => {
     return () => {
       clearPendingTimer();
+      if (movedTimerRef.current !== null) {
+        window.clearTimeout(movedTimerRef.current);
+        movedTimerRef.current = null;
+      }
+      if (dirtyRef.current && !isImmutable && !externalConflictRef.current) {
+        dirtyRef.current = false;
+        const sanitizedDoc = ensureBlockIds(latestDocRef.current);
+        const cleanSub = sanitizeCategoryLabel(subfolderRef.current);
+        void onSaveNote(entryRef.current, {
+          title: titleRef.current.trim() || 'Untitled Note',
+          category: categoryRef.current,
+          subfolder: cleanSub || null,
+          content: sanitizedDoc,
+        });
+      }
     };
-  }, [clearPendingTimer]);
+  }, [clearPendingTimer, isImmutable, onSaveNote]);
 
   const toolbarState = useEditorState({
     editor,
@@ -547,6 +626,7 @@ export function NoteEditorView({
       await performSave(
         titleRef.current,
         categoryRef.current,
+        subfolderRef.current,
         editor.getJSON() as TipTapDoc,
       );
     }
@@ -565,15 +645,70 @@ export function NoteEditorView({
     }
   };
 
-  const handleCategoryChange = (nextCategory: Category) => {
+  const showMoveConfirmation = (label: string) => {
+    setMovedNotice(label);
+    if (movedTimerRef.current !== null) {
+      window.clearTimeout(movedTimerRef.current);
+    }
+    movedTimerRef.current = window.setTimeout(() => {
+      movedTimerRef.current = null;
+      setMovedNotice(null);
+    }, 2400);
+  };
+
+  const moveOpenNoteTo = (nextCategory: Category, nextSubfolder: string) => {
     if (isImmutable) {
       return;
     }
     categoryRef.current = nextCategory;
     setCategory(nextCategory);
-    if (editor) {
-      scheduleDebouncedSave(editor.getJSON() as TipTapDoc);
+    subfolderRef.current = nextSubfolder;
+    setSubfolder(nextSubfolder);
+    showMoveConfirmation(
+      nextSubfolder
+        ? `Moved to ${nextCategory} / ${nextSubfolder}`
+        : `Moved to ${nextCategory}`,
+    );
+    const doc = (editor?.getJSON() as TipTapDoc | undefined) ?? latestDocRef.current;
+    latestDocRef.current = doc;
+    clearPendingTimer();
+    if (!externalConflictRef.current) {
+      void performSave(titleRef.current, nextCategory, nextSubfolder, doc);
+    } else {
+      dirtyRef.current = true;
     }
+  };
+
+  const handleOpenNoteFromPanel = async (target: StoredNoteEntry) => {
+    if (target.note.id === entry.note.id || !onSelectNote) {
+      return;
+    }
+    if (dirtyRef.current && editor && !isImmutable) {
+      clearPendingTimer();
+      await performSave(
+        titleRef.current,
+        categoryRef.current,
+        subfolderRef.current,
+        editor.getJSON() as TipTapDoc,
+      );
+    }
+    onSelectNote(target);
+  };
+
+  const handleCreateSubfolderInBrowser = async () => {
+    const clean = sanitizeCategoryLabel(newSubDraft);
+    const targetCat = browseCategory;
+    if (!clean || !targetCat) {
+      setAddingSubfolder(false);
+      setNewSubDraft('');
+      return;
+    }
+    if (onQuickAddSubfolder) {
+      await onQuickAddSubfolder(targetCat, clean);
+    }
+    setBrowseSubfolder(clean);
+    setAddingSubfolder(false);
+    setNewSubDraft('');
   };
 
   // Safe link click handling: never navigates the app, opens valid http/https/mailto in new tab with rel="noopener noreferrer"
@@ -692,19 +827,42 @@ export function NoteEditorView({
     }
   };
 
-  const catStyle = CATEGORY_STYLE[category];
   const pillarLabel =
     entry.pillar === 'sources'
-      ? 'Sources (immutable)'
+      ? 'Sources (read-only)'
       : entry.pillar === 'manual'
-        ? 'Manual Notes'
-        : 'AI Outputs';
+        ? 'My Notes'
+        : 'AI Notes';
+
+  const browsedSubfolders = browseCategory
+    ? getSubfoldersForCategory(categoryConfigs, browseCategory)
+    : [];
+  const browsedDirectNotes = browseCategory
+    ? allNotes.filter(
+        (n) =>
+          n.note.category.toLowerCase() === browseCategory.toLowerCase() &&
+          !(n.note.subfolder ?? '').trim(),
+      )
+    : [];
+  const browsedSubfolderNotes =
+    browseCategory && browseSubfolder
+      ? allNotes.filter(
+          (n) =>
+            n.note.category.toLowerCase() === browseCategory.toLowerCase() &&
+            (n.note.subfolder ?? '').toLowerCase() ===
+              browseSubfolder.toLowerCase(),
+        )
+      : [];
+  const isViewingDifferentFolder =
+    browseCategory !== null &&
+    (category.toLowerCase() !== browseCategory.toLowerCase() ||
+      (subfolder || '').toLowerCase() !== (browseSubfolder || '').toLowerCase());
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-[#0C0D10]">
       {/* Fixed Top Editor Header & Google Docs-Style Toolbar */}
       <div className="shrink-0 border-b border-[#232734] bg-[#12141A]">
-        {/* Row 1: Back, Meta, Save Status, Export MD, Delete */}
+        {/* Row 1: Back, Meta, Save Status, Folders Toggle, AI Chat, Export MD, Delete */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#1E222E] px-4 py-2.5 lg:px-6">
           <div className="flex items-center gap-3">
             <button
@@ -719,7 +877,9 @@ export function NoteEditorView({
             <div className="hidden items-center gap-2 text-xs text-[#888F9F] sm:flex">
               <span>{pillarLabel}</span>
               <span aria-hidden="true">·</span>
-              <span className="font-mono text-[11px]">{entry.fileName}</span>
+              <span className="text-[#C8CCD6]">
+                {subfolder ? `${category} / ${subfolder}` : category}
+              </span>
             </div>
           </div>
 
@@ -756,15 +916,30 @@ export function NoteEditorView({
               </span>
             )}
 
+            <button
+              type="button"
+              onClick={() => setFolderPanelOpen((prev) => !prev)}
+              aria-pressed={folderPanelOpen}
+              title="Toggle Folders Panel"
+              className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors ${
+                folderPanelOpen
+                  ? 'border-[#E0A83E] bg-[#1D2230] text-[#F3CA77]'
+                  : 'border-[#272C3A] bg-[#171A22] text-[#C8CCD6] hover:border-[#3A4154] hover:text-[#F4F0E7]'
+              }`}
+            >
+              <Folder className="h-3.5 w-3.5 text-[#E0A83E]" />
+              <span className="hidden sm:inline">Folders</span>
+            </button>
+
             {onToggleAiChat && (
               <button
                 type="button"
                 onClick={onToggleAiChat}
                 aria-pressed={aiChatOpen}
                 title="Toggle AI Note Chat Panel"
-                className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors ${
                   aiChatOpen
-                    ? 'border-[#E0A83E]/50 bg-[#E0A83E]/15 text-[#F3CA77]'
+                    ? 'border-[#E0A83E] bg-[#1D2230] text-[#F3CA77]'
                     : 'border-[#272C3A] bg-[#171A22] text-[#C8CCD6] hover:border-[#3A4154] hover:text-[#F4F0E7]'
                 }`}
               >
@@ -776,7 +951,7 @@ export function NoteEditorView({
             <button
               type="button"
               onClick={handleExportMarkdown}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[#272C3A] bg-[#171A22] px-2.5 py-1.5 text-xs font-medium text-[#C8CCD6] transition-colors hover:border-[#3A4154] hover:text-[#F4F0E7]"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#272C3A] bg-[#171A22] px-2.5 text-xs font-medium text-[#C8CCD6] transition-colors hover:border-[#3A4154] hover:text-[#F4F0E7]"
             >
               <Download className="h-3.5 w-3.5" />
               <span>Export .md</span>
@@ -786,7 +961,7 @@ export function NoteEditorView({
               <button
                 type="button"
                 onClick={handleOpenDeleteConfirm}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[#272C3A] bg-[#171A22] px-2.5 py-1.5 text-xs font-medium text-rose-300 transition-colors hover:border-rose-500/40 hover:bg-rose-500/10"
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#272C3A] bg-[#171A22] px-2.5 text-xs font-medium text-rose-300 transition-colors hover:border-[#5A2934] hover:bg-[#241419]"
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">Delete</span>
@@ -979,11 +1154,11 @@ export function NoteEditorView({
                 e.target.value = '';
               }}
             />
-            <span className="ml-1 hidden text-[11px] text-[#7D8496] xl:inline">
-              {uploadingImage
-                ? 'Importing image...'
-                : `Images max ${MAX_IMAGE_MB} MB`}
-            </span>
+            {uploadingImage && (
+              <span className="ml-1 text-[11px] text-[#E0A83E]">
+                Importing image...
+              </span>
+            )}
 
             {/* Contextual Table Actions */}
             {toolbarState?.isTable && (
@@ -1015,13 +1190,15 @@ export function NoteEditorView({
         )}
       </div>
 
-      {/* Pageless Continuous Scroll Canvas */}
-      <div className="flex-1 overflow-y-auto px-4 py-8 sm:px-8">
-        <div className="mx-auto max-w-3xl space-y-5">
+      {/* Main Workspace Split: Pageless Document Left + Drill-Down Folder Explorer Right */}
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        {/* Pageless Continuous Scroll Canvas */}
+        <div className="min-w-0 flex-1 overflow-y-auto px-4 py-8 sm:px-8">
+          <div className="mx-auto max-w-3xl space-y-5">
           {externalConflict && (
             <div
               role="alert"
-              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#E0A83E]/50 bg-[#E0A83E]/12 px-4 py-3 text-xs"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#523F1B] bg-[#19150E] px-4 py-3 text-xs"
             >
               <div className="min-w-0 space-y-0.5">
                 <p className="font-semibold text-[#F6DFA8]">
@@ -1059,6 +1236,7 @@ export function NoteEditorView({
                       void performSave(
                         titleRef.current,
                         categoryRef.current,
+                        subfolderRef.current,
                         editor.getJSON() as TipTapDoc,
                       );
                     }
@@ -1072,13 +1250,13 @@ export function NoteEditorView({
           )}
 
           {saveError && (
-            <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 text-xs text-rose-200">
+            <div className="rounded-lg border border-[#5A2934] bg-[#1C1216] px-4 py-2.5 text-xs text-rose-200">
               {saveError}
             </div>
           )}
 
           {imageError && (
-            <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-200">
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-[#523F1B] bg-[#19150E] px-4 py-2.5 text-xs text-amber-200">
               <span>{imageError}</span>
               <button
                 type="button"
@@ -1091,26 +1269,25 @@ export function NoteEditorView({
           )}
 
           {confirmDelete && (
-            <div className="space-y-3 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-xs">
+            <div className="space-y-3 rounded-xl border border-[#5A2934] bg-[#1C1216] p-4 text-xs">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="space-y-1">
                   <p className="font-semibold text-rose-200">
                     Delete &ldquo;{title || 'Untitled Note'}&rdquo;?
                   </p>
                   <p className="text-rose-200/80">
-                    Removes <code className="font-mono">{entry.fileName}</code>{' '}
-                    from <code className="font-mono">{entry.pillar}/</code>.
+                    Removes this note from your workspace folder.
                   </p>
                   {loadingOrphanPreview ? (
                     <p className="text-rose-200/70">
-                      Checking for unreferenced images in <code className="font-mono">assets/</code>...
+                      Checking for unused images...
                     </p>
                   ) : orphanAssetsToDelete.length > 0 ? (
-                    <div className="mt-2 rounded-lg border border-rose-500/30 bg-[#12141A]/80 p-2.5 text-rose-100">
+                    <div className="mt-2 rounded-lg bg-[#12141A] p-2.5 text-rose-100">
                       <p className="font-medium text-rose-200">
                         {needsFirstAssetConfirm
-                          ? 'First-time asset cleanup confirmation — these unreferenced files in assets/ will also be permanently deleted:'
-                          : 'These unreferenced files in assets/ will also be deleted:'}
+                          ? 'First-time cleanup confirmation — these unused images will also be deleted permanently:'
+                          : 'These unused images will also be deleted:'}
                       </p>
                       <ul className="mt-1 list-disc space-y-0.5 pl-4 font-mono text-[11px] text-rose-200/90">
                         {orphanAssetsToDelete.map((asset) => (
@@ -1124,7 +1301,7 @@ export function NoteEditorView({
                   <button
                     type="button"
                     onClick={() => setConfirmDelete(false)}
-                    className="rounded-md border border-[#2C3140] bg-[#151820] px-3 py-1.5 text-xs font-medium text-[#C8CCD6] hover:text-white"
+                    className="h-8 rounded-md border border-[#2C3140] bg-[#151820] px-3 text-xs font-medium text-[#C8CCD6] hover:text-white"
                   >
                     Cancel
                   </button>
@@ -1132,7 +1309,7 @@ export function NoteEditorView({
                     type="button"
                     onClick={handleConfirmDelete}
                     disabled={deleting || loadingOrphanPreview}
-                    className="rounded-md bg-rose-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-600 disabled:opacity-40"
+                    className="h-8 rounded-md bg-rose-500 px-3 text-xs font-semibold text-white hover:bg-rose-600 disabled:opacity-40"
                   >
                     {deleting ? 'Deleting...' : 'Confirm Delete'}
                   </button>
@@ -1141,8 +1318,8 @@ export function NoteEditorView({
             </div>
           )}
 
-          {/* Title + Category Tagging Row */}
-          <div className="space-y-3 border-b border-[#1E222E] pb-5">
+          {/* Clean Note Title Only (folders moved to right-hand side panel) */}
+          <div className="pb-3">
             <input
               type="text"
               value={title}
@@ -1150,34 +1327,8 @@ export function NoteEditorView({
               onChange={(e) => handleTitleChange(e.target.value)}
               placeholder="Untitled Note (auto-titles from first line)"
               aria-label="Note title"
-              className="w-full bg-transparent font-serif text-3xl leading-tight font-semibold tracking-tight text-[#F5F1E8] placeholder-[#565C6E] focus:outline-none"
+              className="w-full bg-transparent font-serif text-3xl leading-tight font-semibold text-[#F5F1E8] placeholder-[#565C6E] focus:outline-none"
             />
-
-            <div className="flex flex-wrap items-center gap-1.5">
-              {CATEGORIES.map((cat) => {
-                const style = CATEGORY_STYLE[cat];
-                const selected = category === cat;
-                return (
-                  <button
-                    key={cat}
-                    type="button"
-                    disabled={isImmutable}
-                    onClick={() => handleCategoryChange(cat)}
-                    className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                      selected
-                        ? `${style.activeBg} ${style.activeBorder} ${style.text}`
-                        : 'border-[#232734] bg-[#13161E] text-[#8A91A2] hover:border-[#343A4D] hover:text-[#ECEBE6]'
-                    } disabled:cursor-default`}
-                  >
-                    <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
-                    <span>{cat}</span>
-                  </button>
-                );
-              })}
-              <span className="ml-auto font-mono text-[11px] text-[#6B7284]">
-                schema v{entry.note.schemaVersion} · {category}
-              </span>
-            </div>
           </div>
 
           {/* Distinct AI Output Visual Marker & Metadata */}
@@ -1215,7 +1366,7 @@ export function NoteEditorView({
                       : 'text-[#9CA1AE] hover:text-[#ECEBE6]'
                   }`}
                 >
-                  Saved TipTap Note
+                  Full Note
                 </button>
               </div>
 
@@ -1272,12 +1423,368 @@ export function NoteEditorView({
                 onNavigateToBlock={onNavigateToBlock}
               />
             )}
+          </div>
         </div>
+
+        {/* Right-Hand Drill-Down Folder Explorer Panel (browsing never auto-moves the open note) */}
+        {folderPanelOpen && (
+          <aside
+            aria-label="Folder explorer"
+            className="absolute inset-y-0 right-0 z-20 flex w-72 shrink-0 flex-col border-l border-[#232734] bg-[#101218] shadow-2xl md:static md:z-auto md:shadow-none xl:w-80"
+          >
+            {/* Dynamic Drill-Down Header: Folders -> Parent Folder -> Subfolder */}
+            <div className="flex items-center justify-between gap-2 border-b border-[#1E222E] px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2">
+                {browseCategory !== null && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddingSubfolder(false);
+                      setNewSubDraft('');
+                      if (browseSubfolder !== null) {
+                        setBrowseSubfolder(null);
+                      } else {
+                        setBrowseCategory(null);
+                      }
+                    }}
+                    aria-label={
+                      browseSubfolder !== null
+                        ? `Back to ${browseCategory}`
+                        : 'Back to Folders'
+                    }
+                    title={
+                      browseSubfolder !== null
+                        ? `Back to ${browseCategory}`
+                        : 'Back to Folders'
+                    }
+                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[#272C3A] bg-[#161922] text-[#C8CCD6] transition-colors hover:border-[#E0A83E]/50 hover:text-[#F4F0E7]"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                  </button>
+                )}
+
+                <div className="min-w-0">
+                  {browseCategory === null ? (
+                    <h2 className="truncate font-serif text-sm font-semibold text-[#F4F0E7]">
+                      Folders
+                    </h2>
+                  ) : browseSubfolder === null ? (
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`h-2 w-2 shrink-0 rounded-[2px] ${
+                          getCategoryStyle(browseCategory, categoryConfigs).dot
+                        }`}
+                      />
+                      <h2 className="truncate font-serif text-sm font-semibold text-[#F4F0E7]">
+                        {browseCategory}
+                      </h2>
+                    </div>
+                  ) : (
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <Folder className="h-3.5 w-3.5 shrink-0 text-[#E0A83E]" />
+                        <h2 className="truncate font-serif text-sm font-semibold text-[#F4F0E7]">
+                          {browseSubfolder}
+                        </h2>
+                      </div>
+                      <p className="truncate text-[10px] text-[#7D8496]">
+                        in {browseCategory}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {browseCategory === null && onOpenCategoryManager && (
+                <button
+                  type="button"
+                  onClick={onOpenCategoryManager}
+                  title="Customize folders & subfolders"
+                  className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-[#272C3A] bg-[#161922] px-2 text-[11px] font-medium text-[#B8BDC9] transition-colors hover:border-[#E0A83E] hover:text-[#F3CA77]"
+                >
+                  <SlidersHorizontal className="h-3 w-3 text-[#E0A83E]" />
+                  <span>Edit</span>
+                </button>
+              )}
+            </div>
+
+            {/* Drill-Down Body */}
+            <div className="flex-1 space-y-4 overflow-y-auto p-3 text-xs">
+              {browseCategory === null ? (
+                /* Level 0: All Parent Folders */
+                <div className="space-y-1">
+                  {categoryConfigs.map((cat) => {
+                    const style = getCategoryStyle(cat.name, categoryConfigs);
+                    const totalInCat = allNotes.filter(
+                      (n) =>
+                        n.note.category.toLowerCase() === cat.name.toLowerCase(),
+                    ).length;
+                    const containsCurrent =
+                      category.toLowerCase() === cat.name.toLowerCase();
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => {
+                          setBrowseCategory(cat.name);
+                          setBrowseSubfolder(null);
+                          setAddingSubfolder(false);
+                          setNewSubDraft('');
+                        }}
+                        className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors ${
+                          containsCurrent
+                            ? 'border-l-2 border-[#E0A83E] bg-[#1C202B] text-[#F5F1E8]'
+                            : 'text-[#D5D4CD] hover:bg-[#171A23]'
+                        }`}
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span
+                            className={`h-2 w-2 shrink-0 rounded-[2px] ${style.dot}`}
+                          />
+                          <span className="truncate font-medium">
+                            {cat.name}
+                          </span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-[#7D8496]">
+                          <span className="tabular-nums">{totalInCat}</span>
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : browseSubfolder === null ? (
+                /* Level 1: Inside Parent Folder -> Subfolders + Notes inside parent */
+                <>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between px-1">
+                      <span className="text-[11px] font-medium text-[#7D8496]">
+                        Subfolders
+                      </span>
+                      {!isImmutable && !addingSubfolder && (
+                        <button
+                          type="button"
+                          onClick={() => setAddingSubfolder(true)}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium text-[#E0A83E] hover:text-[#F3CA77]"
+                        >
+                          <FolderPlus className="h-3 w-3" />
+                          <span>New</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {addingSubfolder && (
+                      <div className="flex items-center gap-1.5 rounded-lg border border-[#343A4E] bg-[#141720] p-1.5">
+                        <input
+                          type="text"
+                          autoFocus
+                          value={newSubDraft}
+                          onChange={(e) => setNewSubDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              void handleCreateSubfolderInBrowser();
+                            } else if (e.key === 'Escape') {
+                              setAddingSubfolder(false);
+                              setNewSubDraft('');
+                            }
+                          }}
+                          placeholder={`Subfolder in ${browseCategory}...`}
+                          className="h-7 min-w-0 flex-1 rounded bg-[#0C0E13] px-2 text-[11px] text-[#ECEBE6] placeholder-[#656C7D] focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void handleCreateSubfolderInBrowser()}
+                          className="h-7 rounded bg-[#E0A83E] px-2 text-[11px] font-semibold text-[#111216]"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    )}
+
+                    {browsedSubfolders.length === 0 ? (
+                      <p className="px-1 text-[11px] text-[#686F80]">
+                        No subfolders in {browseCategory}.
+                      </p>
+                    ) : (
+                      <div className="space-y-1">
+                        {browsedSubfolders.map((sub) => {
+                          const subCount = allNotes.filter(
+                            (n) =>
+                              n.note.category.toLowerCase() ===
+                                browseCategory.toLowerCase() &&
+                              (n.note.subfolder ?? '').toLowerCase() ===
+                                sub.toLowerCase(),
+                          ).length;
+                          const containsCurrent =
+                            category.toLowerCase() ===
+                              browseCategory.toLowerCase() &&
+                            subfolder.toLowerCase() === sub.toLowerCase();
+                          return (
+                            <button
+                              key={sub}
+                              type="button"
+                              onClick={() => {
+                                setBrowseSubfolder(sub);
+                                setAddingSubfolder(false);
+                                setNewSubDraft('');
+                              }}
+                              className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors ${
+                                containsCurrent
+                                  ? 'border-l-2 border-[#E0A83E] bg-[#1C202B] text-[#F5F1E8]'
+                                  : 'text-[#D5D4CD] hover:bg-[#171A23]'
+                              }`}
+                            >
+                              <div className="flex min-w-0 items-center gap-2">
+                                <Folder className="h-3.5 w-3.5 shrink-0 text-[#E0A83E]" />
+                                <span className="truncate font-medium">
+                                  {sub}
+                                </span>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-[#7D8496]">
+                                <span className="tabular-nums">{subCount}</span>
+                                <ChevronRight className="h-3.5 w-3.5" />
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5 pt-2">
+                    <div className="flex items-center justify-between px-1">
+                      <span className="text-[11px] font-medium text-[#7D8496]">
+                        Notes in {browseCategory}
+                      </span>
+                      {onCreateNoteInFolder && (
+                        <button
+                          type="button"
+                          onClick={() => onCreateNoteInFolder(browseCategory)}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium text-[#E0A83E] hover:text-[#F3CA77]"
+                        >
+                          <Plus className="h-3 w-3" />
+                          <span>New note</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {browsedDirectNotes.length === 0 ? (
+                      <p className="px-1 text-[11px] text-[#686F80]">
+                        No notes directly in {browseCategory}.
+                      </p>
+                    ) : (
+                      <div className="space-y-1">
+                        {browsedDirectNotes.map((item) => {
+                          const isCurrent = item.note.id === entry.note.id;
+                          return (
+                            <button
+                              key={item.note.id}
+                              type="button"
+                              onClick={() => void handleOpenNoteFromPanel(item)}
+                              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                                isCurrent
+                                  ? 'bg-[#1D2230] text-[#F6DFA8]'
+                                  : 'text-[#C8CCD6] hover:bg-[#171A23] hover:text-[#F4F0E7]'
+                              }`}
+                            >
+                              <FileText className="h-3.5 w-3.5 shrink-0 text-[#888F9F]" />
+                              <span className="min-w-0 flex-1 truncate font-medium">
+                                {item.note.title}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                /* Level 2: Inside Subfolder -> Header replaced by Subfolder, lists notes inside it */
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-[11px] font-medium text-[#7D8496] tabular-nums">
+                      Notes ({browsedSubfolderNotes.length})
+                    </span>
+                    {onCreateNoteInFolder && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onCreateNoteInFolder(browseCategory, browseSubfolder)
+                        }
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-[#E0A83E] hover:text-[#F3CA77]"
+                      >
+                        <Plus className="h-3 w-3" />
+                        <span>New note</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {browsedSubfolderNotes.length === 0 ? (
+                    <p className="px-1 text-[11px] text-[#686F80]">
+                      No notes in {browseSubfolder} yet.
+                    </p>
+                  ) : (
+                    <div className="space-y-1">
+                      {browsedSubfolderNotes.map((item) => {
+                        const isCurrent = item.note.id === entry.note.id;
+                        return (
+                          <button
+                            key={item.note.id}
+                            type="button"
+                            onClick={() => void handleOpenNoteFromPanel(item)}
+                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                              isCurrent
+                                ? 'bg-[#1D2230] text-[#F6DFA8]'
+                                : 'text-[#C8CCD6] hover:bg-[#171A23] hover:text-[#F4F0E7]'
+                            }`}
+                          >
+                            <FileText className="h-3.5 w-3.5 shrink-0 text-[#888F9F]" />
+                            <span className="min-w-0 flex-1 truncate font-medium">
+                              {item.note.title}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Footer: Current note folder & explicit non-accidental Move button */}
+            <div className="space-y-2 border-t border-[#1E222E] bg-[#0D0F14] px-3.5 py-3 text-[11px]">
+              <div className="flex items-center justify-between gap-2 text-[#888F9F]">
+                <span>Current note:</span>
+                <span className="truncate font-medium text-[#D5D4CD]">
+                  {subfolder ? `${category} / ${subfolder}` : category}
+                </span>
+              </div>
+
+              {movedNotice && (
+                <p className="font-medium text-emerald-300">{movedNotice}</p>
+              )}
+
+              {!isImmutable && isViewingDifferentFolder && browseCategory && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    moveOpenNoteTo(browseCategory, browseSubfolder ?? '')
+                  }
+                  className="h-8 w-full rounded-lg bg-[#232018] px-3 text-center font-medium text-[#F3CA77] transition-colors hover:bg-[#322B1E]"
+                >
+                  Move current note to{' '}
+                  {browseSubfolder ? browseSubfolder : browseCategory}
+                </button>
+              )}
+            </div>
+          </aside>
+        )}
       </div>
 
       {/* Link URL Dialog */}
       {linkModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xs">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
           <div
             role="dialog"
             aria-modal="true"
@@ -1291,9 +1798,9 @@ export function NoteEditorView({
               Insert or Edit Link
             </h3>
             <p className="mt-1 text-xs text-[#888F9F]">
-              Allowed protocols: <code className="font-mono">http://</code>,{' '}
-              <code className="font-mono">https://</code>,{' '}
-              <code className="font-mono">mailto:</code>
+              Only <code className="font-mono">http://</code>,{' '}
+              <code className="font-mono">https://</code>, or{' '}
+              <code className="font-mono">mailto:</code> links are supported.
             </p>
             <form onSubmit={handleApplyLink} className="mt-4 space-y-3">
               <input
@@ -1305,7 +1812,7 @@ export function NoteEditorView({
                   setLinkUrlError(null);
                 }}
                 placeholder="https://example.com"
-                className="h-9 w-full rounded-lg border border-[#282D3B] bg-[#0E1015] px-3 text-xs text-[#ECEBE6] placeholder-[#656C7D] focus:border-[#E0A83E]/60 focus:outline-none"
+                className="h-9 w-full rounded-lg border border-[#282D3B] bg-[#0E1015] px-3 text-xs text-[#ECEBE6] placeholder-[#656C7D] focus:border-[#E0A83E] focus:outline-none"
               />
               {linkUrlError && (
                 <p className="text-xs text-rose-400">{linkUrlError}</p>
@@ -1314,13 +1821,13 @@ export function NoteEditorView({
                 <button
                   type="button"
                   onClick={() => setLinkModalOpen(false)}
-                  className="rounded-md border border-[#282D3B] px-3 py-1.5 text-xs text-[#B2B7C4] hover:text-white"
+                  className="inline-flex h-8 items-center rounded-md border border-[#282D3B] px-3 text-xs text-[#B2B7C4] hover:text-white"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="rounded-md bg-[#E0A83E] px-3.5 py-1.5 text-xs font-semibold text-[#111216] hover:bg-[#ECB955]"
+                  className="inline-flex h-8 items-center rounded-md bg-[#E0A83E] px-3.5 text-xs font-semibold text-[#111216] hover:bg-[#ECB955]"
                 >
                   Apply Link
                 </button>
@@ -1354,9 +1861,9 @@ function ToolbarBtn({
       aria-pressed={active}
       disabled={disabled}
       onClick={onClick}
-      className={`inline-flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60 ${
+      className={`inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E] ${
         active
-          ? 'bg-[#E0A83E]/20 text-[#F3CA77]'
+          ? 'bg-[#232018] text-[#F3CA77]'
           : 'text-[#B4B9C6] hover:bg-[#1E222E] hover:text-[#F4F0E7]'
       } disabled:cursor-not-allowed disabled:opacity-35`}
     >

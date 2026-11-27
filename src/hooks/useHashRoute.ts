@@ -38,10 +38,9 @@ export function useHashRoute() {
 
   const navigate = useCallback((nextRoute: RoutePath) => {
     const targetHash = `#${nextRoute}`;
+    setRoute(nextRoute);
     if (window.location.hash !== targetHash) {
       window.location.hash = targetHash;
-    } else {
-      setRoute(nextRoute);
     }
   }, []);
 

@@ -15,7 +15,7 @@ import {
 export const KEY_VAULT_PBKDF2_ITERATIONS = 210_000;
 
 export const OS_KEYCHAIN_HONEST_WARNING =
-  'Browser-side storage (even PBKDF2 + AES-GCM encrypted in IndexedDB or held in session memory) is weaker than an OS keychain: any script running on this browser origin while unlocked can access key material.';
+  'Saving a key in your browser (even locked with a passphrase or kept for this session only) is weaker than an OS keychain: scripts running in the page while unlocked can read it.';
 
 const DEFAULT_MODEL_BY_PROVIDER: Record<CloudProviderId, string> = {
   gemini: 'gemini-2.5-flash',

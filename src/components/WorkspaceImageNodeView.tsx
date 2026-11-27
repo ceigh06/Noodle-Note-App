@@ -85,8 +85,8 @@ export function WorkspaceImageNodeView({
               {formatMissingImageMessage(src || '(empty path)')}
             </p>
             <p className="text-[11px] text-[#888F9F]">
-              The file is missing from <code className="font-mono">assets/</code>.
-              Note content was left unchanged.
+              File missing from <code className="font-mono">assets/</code>. Note
+              left unchanged.
             </p>
           </div>
         </div>

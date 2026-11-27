@@ -7,7 +7,7 @@ import {
 } from './microphoneController';
 
 export const PICOVOICE_LICENSING_SUMMARY =
-  'Picovoice Porcupine requires your own personal AccessKey from Picovoice Console (console.picovoice.ai). Free accounts carry Picovoice evaluation/usage limits; commercial redistribution requires a commercial Picovoice license. AccessKeys are never bundled or stored permanently by Noodle.';
+  'Needs your own free or paid AccessKey from Picovoice Console (console.picovoice.ai). Commercial apps require a paid Picovoice license. Keys are never saved permanently.';
 
 let activePorcupine: PorcupineWorker | null = null;
 let unsubscribeKillHook: (() => void) | null = null;

@@ -2,7 +2,6 @@ import {useCallback, useEffect, useState} from 'react';
 import {
   ArrowLeft,
   CheckCircle2,
-  ClipboardCheck,
   Play,
   XCircle,
 } from 'lucide-react';
@@ -128,20 +127,13 @@ export function DiagnosticsPage({
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6 px-4 py-6 lg:px-8">
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#202430] pb-5">
+      <div className="flex flex-wrap items-end justify-between gap-4 pb-1">
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs font-medium text-[#E0A83E]">
-            <ClipboardCheck className="h-3.5 w-3.5" />
-            <span>System Verification</span>
-          </div>
-          <h1 className="font-serif text-2xl font-semibold tracking-tight text-[#F5F1E8] sm:text-3xl">
+          <h1 className="font-serif text-2xl font-semibold text-[#F5F1E8] sm:text-3xl">
             Diagnostics
           </h1>
-          <p className="text-xs text-[#9198A8] sm:text-sm">
-            Automated storage, block-ID stability, schema migration, canonical
-            hash, Markdown round-trip, autosave, image asset, change-detection,
-            on-device search, PDF immutability, voice kill switch &amp; zero audio
-            storage, and BYOK cloud privacy self-checks.
+          <p className="max-w-prose text-xs text-[#9198A8] sm:text-sm">
+            Automated checks for saving notes, search, privacy, and microphone safety.
           </p>
         </div>
 
@@ -150,7 +142,7 @@ export function DiagnosticsPage({
             type="button"
             onClick={runChecks}
             disabled={running}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[#E0A83E] px-3.5 py-2 text-xs font-semibold text-[#111216] transition-colors hover:bg-[#ECB955] disabled:opacity-50"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#E0A83E] px-3.5 text-xs font-semibold text-[#111216] transition-colors hover:bg-[#ECB955] disabled:opacity-50"
           >
             <Play className="h-3.5 w-3.5" />
             <span>{running ? 'Running checks...' : 'Run Self-Checks'}</span>
@@ -159,7 +151,7 @@ export function DiagnosticsPage({
           <button
             type="button"
             onClick={() => onNavigate('/workspace')}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[#282D3B] bg-[#141720] px-3.5 py-2 text-xs font-medium text-[#C8CCD6] transition-colors hover:border-[#383F52] hover:text-[#ECEBE6]"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#282D3B] bg-[#141720] px-3.5 text-xs font-medium text-[#C8CCD6] transition-colors hover:border-[#383F52] hover:text-[#ECEBE6]"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             <span>Back to Workspace</span>
@@ -176,8 +168,7 @@ export function DiagnosticsPage({
             of {checks.length} checks
           </span>
           <span>
-            Storage, Editor, Asset, Change-Detection, Local Search, Voice &amp; BYOK
-            Privacy invariants
+            Storage, Editor, Search, Voice &amp; Privacy checks
           </span>
         </div>
       )}
@@ -202,13 +193,15 @@ export function DiagnosticsPage({
             Running self-checks...
           </div>
         ) : (
-          <div className="divide-y divide-[#1E222E]">
-            {checks.map((check) => {
+          <div className="space-y-0.5 py-1">
+            {checks.map((check, idx) => {
               const isPass = check.status === 'PASS';
               return (
                 <div
                   key={check.id}
-                  className="grid grid-cols-12 items-start gap-2 px-5 py-3.5 text-xs"
+                  className={`grid grid-cols-12 items-start gap-2 px-5 py-3.5 text-xs transition-colors hover:bg-[#171A23] ${
+                    idx % 2 === 1 ? 'bg-[#101218]' : ''
+                  }`}
                 >
                   <div className="col-span-12 font-medium text-[#ECEBE6] sm:col-span-4">
                     {check.name}
@@ -230,7 +223,7 @@ export function DiagnosticsPage({
                   <div className="col-span-8 leading-relaxed text-[#A4AAB7] sm:col-span-5">
                     {check.details}
                   </div>
-                  <div className="col-span-12 text-right font-mono text-[11px] text-[#7D8496] tabular-nums sm:col-span-1">
+                  <div className="col-span-12 text-right text-[11px] text-[#7D8496] tabular-nums sm:col-span-1">
                     {check.durationMs !== undefined
                       ? `${check.durationMs}ms`
                       : '—'}

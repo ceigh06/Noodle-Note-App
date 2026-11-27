@@ -1,5 +1,4 @@
 import {
-  CATEGORIES,
   Category,
   NoteRecord,
   Pillar,
@@ -170,8 +169,20 @@ function isValidPillar(value: unknown): value is Pillar {
   return value === 'sources' || value === 'manual' || value === 'ai';
 }
 
+function sanitizeOptionalLabel(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const clean = value
+    .replace(/[\u0000-\u001f\u007f/\\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60);
+  return clean || undefined;
+}
+
 function isValidCategory(value: unknown): value is Category {
-  return typeof value === 'string' && CATEGORIES.includes(value as Category);
+  return sanitizeOptionalLabel(value) !== undefined;
 }
 
 /**
@@ -234,6 +245,10 @@ export function migrateNote(
       ? (draft.aiMeta as NoteRecord['aiMeta'])
       : undefined;
 
+  const normalizedCategory =
+    sanitizeOptionalLabel(draft.category) ?? 'Study';
+  const normalizedSubfolder = sanitizeOptionalLabel(draft.subfolder);
+
   const finalNote: NoteRecord = {
     id: typeof draft.id === 'string' ? draft.id : createUuid(),
     schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -241,7 +256,8 @@ export function migrateNote(
       typeof draft.title === 'string' && draft.title.trim()
         ? draft.title
         : 'Untitled Note',
-    category: isValidCategory(draft.category) ? draft.category : 'Study',
+    category: normalizedCategory,
+    ...(normalizedSubfolder ? {subfolder: normalizedSubfolder} : {}),
     pillar: isValidPillar(draft.pillar) ? draft.pillar : fallbackPillar,
     createdAt:
       typeof draft.createdAt === 'string'

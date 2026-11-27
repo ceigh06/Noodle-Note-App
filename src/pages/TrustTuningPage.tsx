@@ -5,7 +5,6 @@ import {
   Globe,
   Plus,
   ShieldCheck,
-  Sliders,
   Trash2,
   AlertCircle,
 } from 'lucide-react';
@@ -105,32 +104,29 @@ export function TrustTuningPage({onNavigate}: TrustTuningPageProps) {
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6 px-4 py-6 lg:px-8">
       {/* Header */}
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#202430] pb-5">
+      <div className="flex flex-wrap items-end justify-between gap-4 pb-1">
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs font-medium text-[#E0A83E]">
-            <Sliders className="h-3.5 w-3.5" />
-            <span>Trust Signals &amp; Knowledge Gap Tuning</span>
-          </div>
-          <h1 className="font-serif text-2xl font-semibold tracking-tight text-[#F5F1E8] sm:text-3xl">
+          <h1 className="font-serif text-2xl font-semibold text-[#F5F1E8] sm:text-3xl">
             Trust &amp; Grounding Settings
           </h1>
-          <p className="text-xs text-[#9198A8] sm:text-sm">
-            Tune section knowledge gap thresholds, inspect local matching scores, and manage web grounding domain whitelists.
+          <p className="max-w-prose text-xs text-[#9198A8] sm:text-sm">
+            Adjust when Noodle warns about missing notes and choose which
+            websites AI can cite.
           </p>
         </div>
 
         <button
           type="button"
           onClick={() => onNavigate('/workspace/synthesizer')}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[#282D3B] bg-[#141720] px-3.5 py-2 text-xs font-medium text-[#C8CCD6] transition-colors hover:border-[#383F52] hover:text-[#ECEBE6]"
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#282D3B] bg-[#141720] px-3.5 text-xs font-medium text-[#C8CCD6] transition-colors hover:border-[#383F52] hover:text-[#ECEBE6]"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
-          <span>Back to Synthesizer</span>
+          <span>Back to Study Creator</span>
         </button>
       </div>
 
       {successMessage && (
-        <div className="flex items-center gap-2 rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-4 py-3 text-xs text-emerald-200">
+        <div className="flex items-center gap-2 rounded-xl border border-[#264D3E] bg-[#11201A] px-4 py-3 text-xs text-emerald-200">
           <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-400" />
           <span>{successMessage}</span>
         </div>
@@ -144,17 +140,22 @@ export function TrustTuningPage({onNavigate}: TrustTuningPageProps) {
           <section className="space-y-4 rounded-xl border border-[#232734] bg-[#13161E] p-5">
             <div className="space-y-1">
               <h2 className="font-serif text-base font-semibold text-[#F5F1E8]">
-                Section-Level Knowledge Gap Threshold
+                Missing-Notes Sensitivity
               </h2>
               <p className="text-xs text-[#8E95A5]">
-                If a synthesized section&apos;s best local retrieval similarity score falls below this threshold, the section is flagged with <code className="font-mono text-[#F4D084]">&apos;No supporting notes found&apos;</code>.
+                If your notes don&apos;t match a study guide section above this
+                score, it is flagged with{' '}
+                <span className="font-medium text-[#F4D084]">
+                  &lsquo;No supporting notes found&rsquo;
+                </span>
+                .
               </p>
             </div>
 
-            <div className="space-y-3 rounded-lg border border-[#232734] bg-[#0E1015] p-4">
+            <div className="space-y-3 rounded-lg bg-[#0E1015] p-4">
               <div className="flex items-center justify-between text-xs font-medium">
-                <span className="text-[#C8CCD6]">Current Threshold</span>
-                <span className="font-mono text-sm font-semibold text-[#E0A83E] tabular-nums">
+                <span className="text-[#C8CCD6]">Minimum Match Score</span>
+                <span className="text-sm font-semibold text-[#E0A83E] tabular-nums">
                   {trustState.knowledgeGapThreshold.toFixed(2)}
                 </span>
               </div>
@@ -170,9 +171,9 @@ export function TrustTuningPage({onNavigate}: TrustTuningPageProps) {
               />
 
               <div className="flex justify-between text-[11px] text-[#7D8496] tabular-nums">
-                <span>Stricter (0.05)</span>
+                <span>Fewer warnings (0.05)</span>
                 <span>Balanced (0.25)</span>
-                <span>Lenient (0.90)</span>
+                <span>More warnings (0.90)</span>
               </div>
             </div>
           </section>
@@ -182,10 +183,11 @@ export function TrustTuningPage({onNavigate}: TrustTuningPageProps) {
             <div className="flex items-center justify-between gap-2">
               <div className="space-y-1">
                 <h2 className="font-serif text-base font-semibold text-[#F5F1E8]">
-                  Web Grounding (BYOK Cloud)
+                  Web Search Backup
                 </h2>
                 <p className="text-xs text-[#8E95A5]">
-                  Off by default. When enabled, cloud synthesis can incorporate web sources strictly filtered through your allowed domain whitelist.
+                  Off by default. Lets cloud AI pull extra citations only from
+                  approved websites below.
                 </p>
               </div>
 
@@ -196,31 +198,31 @@ export function TrustTuningPage({onNavigate}: TrustTuningPageProps) {
                   onChange={(e) => void handleToggleWebGrounding(e.target.checked)}
                   className="peer sr-only"
                 />
-                <div className="peer h-6 w-11 rounded-full bg-[#222736] after:absolute after:top-[2px] after:left-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-[#E0A83E] peer-checked:after:translate-x-full peer-focus:outline-none" />
+                <div className="peer h-6 w-11 rounded-full bg-[#222736] after:absolute after:top-[2px] after:left-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-transform after:duration-150 after:content-[''] peer-checked:bg-[#E0A83E] peer-checked:after:translate-x-full peer-focus:outline-none" />
               </label>
             </div>
 
             {/* Allowed Domains */}
             <div className="space-y-3 pt-2">
               <p className="text-xs font-medium text-[#C8CCD6]">
-                Allowed Domain Whitelist (.edu and .gov enabled by default)
+                Allowed Websites (.edu and .gov allowed by default)
               </p>
 
               <div className="flex flex-wrap gap-1.5">
                 {DEFAULT_ALLOWED_DOMAINS.map((d) => (
                   <span
                     key={d}
-                    className="inline-flex items-center gap-1 rounded-md border border-[#282D3B] bg-[#171A23] px-2.5 py-1 font-mono text-[11px] text-[#C8CCD6]"
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md bg-[#171A23] px-2.5 text-xs text-[#C8CCD6]"
                   >
                     <Globe className="h-3 w-3 text-[#E0A83E]" />
                     <span>{d}</span>
-                    <span className="text-[9px] text-[#767D8F]">(default)</span>
+                    <span className="text-[10px] text-[#767D8F]">default</span>
                   </span>
                 ))}
                 {trustState.userAllowedDomains.map((d) => (
                   <span
                     key={d}
-                    className="inline-flex items-center gap-1 rounded-md border border-[#3A4154] bg-[#1D2230] px-2.5 py-1 font-mono text-[11px] text-[#ECEBE6]"
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md bg-[#1D2230] px-2.5 text-xs text-[#ECEBE6]"
                   >
                     <Globe className="h-3 w-3 text-emerald-400" />
                     <span>{d}</span>
@@ -228,7 +230,7 @@ export function TrustTuningPage({onNavigate}: TrustTuningPageProps) {
                       type="button"
                       onClick={() => void handleRemoveDomain(d)}
                       aria-label={`Remove domain ${d}`}
-                      className="ml-1 rounded p-0.5 text-[#8E95A5] hover:text-rose-300"
+                      className="ml-0.5 rounded p-0.5 text-[#8E95A5] hover:text-rose-300"
                     >
                       <Trash2 className="h-3 w-3" />
                     </button>
@@ -246,7 +248,7 @@ export function TrustTuningPage({onNavigate}: TrustTuningPageProps) {
                       setDomainError(null);
                     }}
                     placeholder="e.g. arxiv.org or .ac.uk"
-                    className="h-9 flex-1 rounded-lg border border-[#282D3B] bg-[#0E1015] px-3 font-mono text-xs text-[#ECEBE6] placeholder-[#656C7D] focus:border-[#E0A83E]/60 focus:outline-none"
+                    className="h-9 flex-1 rounded-lg border border-[#282D3B] bg-[#0E1015] px-3 text-xs text-[#ECEBE6] placeholder-[#656C7D] focus:border-[#E0A83E]/60 focus:outline-none"
                   />
                   <button
                     type="submit"
@@ -265,26 +267,26 @@ export function TrustTuningPage({onNavigate}: TrustTuningPageProps) {
         {/* Right Column: Tunable Section Scores Screen */}
         <div className="space-y-4 lg:col-span-6">
           <section className="flex flex-col rounded-xl border border-[#232734] bg-[#13161E] p-5">
-            <div className="flex items-baseline justify-between gap-2 border-b border-[#202430] pb-3">
+            <div className="flex items-baseline justify-between gap-2 pb-2">
               <div>
                 <h2 className="font-serif text-base font-semibold text-[#F5F1E8]">
-                  Section Best Similarity Scores
+                  Section Match Scores
                 </h2>
                 <p className="text-xs text-[#8E95A5]">
-                  Recorded section retrieval scores across recent AI syntheses.
+                  Best note match score for each recent study guide section.
                 </p>
               </div>
-              <span className="font-mono text-xs text-[#7D8496] tabular-nums">
+              <span className="text-xs text-[#7D8496] tabular-nums">
                 {sectionRows.length} recorded
               </span>
             </div>
 
-            <div className="mt-3 max-h-[520px] flex-1 space-y-2.5 overflow-y-auto pr-1">
+            <div className="mt-3 max-h-[520px] flex-1 space-y-2 overflow-y-auto pr-1">
               {sectionRows.length === 0 ? (
                 <div className="py-16 text-center text-xs text-[#7D8496]">
-                  <p className="font-medium text-[#9CA1AE]">No section scores recorded yet.</p>
+                  <p className="font-medium text-[#9CA1AE]">No section scores yet.</p>
                   <p className="mt-1">
-                    Run a synthesis in <code className="font-mono">Synthesizer</code> to generate and evaluate section-level retrieval queries.
+                    Create a guide in Study Creator to see section match scores here.
                   </p>
                 </div>
               ) : (
@@ -293,10 +295,10 @@ export function TrustTuningPage({onNavigate}: TrustTuningPageProps) {
                   return (
                     <div
                       key={row.id}
-                      className={`space-y-1.5 rounded-lg border p-3 text-xs transition-colors ${
+                      className={`space-y-1.5 rounded-lg p-3 text-xs transition-colors ${
                         isGap
-                          ? 'border-amber-500/40 bg-amber-500/8'
-                          : 'border-[#222634] bg-[#0F1117]'
+                          ? 'border-l-2 border-[#E0A83E] bg-[#191610]'
+                          : 'bg-[#0F1117]'
                       }`}
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -304,11 +306,11 @@ export function TrustTuningPage({onNavigate}: TrustTuningPageProps) {
                           {row.sectionHeading}
                         </span>
                         <span
-                          className={`font-mono font-semibold tabular-nums ${
+                          className={`font-semibold tabular-nums ${
                             isGap ? 'text-amber-300' : 'text-emerald-400'
                           }`}
                         >
-                          {row.bestScore.toFixed(2)} ({row.scoreLabel})
+                          {row.bestScore.toFixed(2)} · {row.scoreLabel}
                         </span>
                       </div>
 

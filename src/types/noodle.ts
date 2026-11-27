@@ -4,13 +4,31 @@ export type WritablePillar = 'manual' | 'ai';
 
 export type PillarFilter = 'all' | Pillar;
 
-export type Category =
-  | 'Work'
-  | 'Study'
-  | 'Assignment'
-  | 'Projects'
-  | 'Videos'
-  | 'Wishlist';
+export type Category = string;
+
+export type CategoryColorKey =
+  | 'amber'
+  | 'sky'
+  | 'rose'
+  | 'emerald'
+  | 'violet'
+  | 'teal'
+  | 'orange'
+  | 'slate';
+
+export interface CategoryStyle {
+  dot: string;
+  text: string;
+  activeBg: string;
+  activeBorder: string;
+}
+
+export interface UserCategoryConfig {
+  id: string;
+  name: string;
+  color: CategoryColorKey;
+  subfolders: string[];
+}
 
 export type RoutePath =
   | '/'
@@ -188,6 +206,7 @@ export interface NoteRecord {
   schemaVersion: number;
   title: string;
   category: Category;
+  subfolder?: string;
   pillar: Pillar;
   createdAt: string;
   updatedAt: string;
@@ -460,51 +479,73 @@ export const CATEGORIES: Category[] = [
   'Wishlist',
 ];
 
-export const CATEGORY_STYLE: Record<
-  Category,
-  {
-    dot: string;
-    text: string;
-    activeBg: string;
-    activeBorder: string;
-  }
-> = {
-  Work: {
+export const CATEGORY_COLOR_PALETTE: Record<CategoryColorKey, CategoryStyle> = {
+  sky: {
     dot: 'bg-sky-400',
     text: 'text-sky-300',
-    activeBg: 'bg-sky-500/15',
-    activeBorder: 'border-sky-400/50',
+    activeBg: 'bg-[#1D2230]',
+    activeBorder: 'border-sky-400',
   },
-  Study: {
+  amber: {
     dot: 'bg-amber-400',
     text: 'text-amber-300',
-    activeBg: 'bg-amber-500/15',
-    activeBorder: 'border-amber-400/50',
+    activeBg: 'bg-[#1D2230]',
+    activeBorder: 'border-amber-400',
   },
-  Assignment: {
+  rose: {
     dot: 'bg-rose-400',
     text: 'text-rose-300',
-    activeBg: 'bg-rose-500/15',
-    activeBorder: 'border-rose-400/50',
+    activeBg: 'bg-[#1D2230]',
+    activeBorder: 'border-rose-400',
   },
-  Projects: {
+  emerald: {
     dot: 'bg-emerald-400',
     text: 'text-emerald-300',
-    activeBg: 'bg-emerald-500/15',
-    activeBorder: 'border-emerald-400/50',
+    activeBg: 'bg-[#1D2230]',
+    activeBorder: 'border-emerald-400',
   },
-  Videos: {
+  violet: {
     dot: 'bg-violet-400',
     text: 'text-violet-300',
-    activeBg: 'bg-violet-500/15',
-    activeBorder: 'border-violet-400/50',
+    activeBg: 'bg-[#1D2230]',
+    activeBorder: 'border-violet-400',
   },
-  Wishlist: {
+  teal: {
     dot: 'bg-teal-400',
     text: 'text-teal-300',
-    activeBg: 'bg-teal-500/15',
-    activeBorder: 'border-teal-400/50',
+    activeBg: 'bg-[#1D2230]',
+    activeBorder: 'border-teal-400',
   },
+  orange: {
+    dot: 'bg-orange-400',
+    text: 'text-orange-300',
+    activeBg: 'bg-[#1D2230]',
+    activeBorder: 'border-orange-400',
+  },
+  slate: {
+    dot: 'bg-slate-400',
+    text: 'text-slate-300',
+    activeBg: 'bg-[#1D2230]',
+    activeBorder: 'border-slate-400',
+  },
+};
+
+export const DEFAULT_CATEGORY_CONFIGS: UserCategoryConfig[] = [
+  {id: 'cat-work', name: 'Work', color: 'sky', subfolders: []},
+  {id: 'cat-study', name: 'Study', color: 'amber', subfolders: []},
+  {id: 'cat-assignment', name: 'Assignment', color: 'rose', subfolders: []},
+  {id: 'cat-projects', name: 'Projects', color: 'emerald', subfolders: []},
+  {id: 'cat-videos', name: 'Videos', color: 'violet', subfolders: []},
+  {id: 'cat-wishlist', name: 'Wishlist', color: 'teal', subfolders: []},
+];
+
+export const CATEGORY_STYLE: Record<string, CategoryStyle> = {
+  Work: CATEGORY_COLOR_PALETTE.sky,
+  Study: CATEGORY_COLOR_PALETTE.amber,
+  Assignment: CATEGORY_COLOR_PALETTE.rose,
+  Projects: CATEGORY_COLOR_PALETTE.emerald,
+  Videos: CATEGORY_COLOR_PALETTE.violet,
+  Wishlist: CATEGORY_COLOR_PALETTE.teal,
 };
 
 export interface ExtractedSyllabusTopic {
@@ -617,5 +658,7 @@ export interface VoiceRuntimeState {
   lastError: string | null;
   wakeWordActive: boolean;
   wakeWordStatusMessage: string | null;
+  micReady?: boolean;
+  micLevel?: number;
 }
 

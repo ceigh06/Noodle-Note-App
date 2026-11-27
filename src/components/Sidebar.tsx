@@ -51,28 +51,28 @@ export function Sidebar({
     {
       id: 'all',
       label: 'All Notes',
-      subtitle: 'Unified vault index',
+      subtitle: 'Everything in one view',
       count: counts.all,
       icon: Layers,
     },
     {
       id: 'sources',
       label: 'Sources',
-      subtitle: 'Papers, PDFs, references',
+      subtitle: 'PDFs & reference readings',
       count: counts.sources,
       icon: BookOpen,
     },
     {
       id: 'manual',
-      label: 'Manual Notes',
-      subtitle: 'Your writing · AI read-only',
+      label: 'My Notes',
+      subtitle: 'Your personal notes',
       count: counts.manual,
       icon: PenLine,
     },
     {
       id: 'ai',
-      label: 'AI Outputs',
-      subtitle: 'Study guides & synthesis',
+      label: 'AI Notes',
+      subtitle: 'Study guides & summaries',
       count: counts.ai,
       icon: Cpu,
     },
@@ -112,9 +112,9 @@ export function Sidebar({
         <button
           type="button"
           onClick={() => handlePillarClick('all')}
-          className="flex items-baseline gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60 rounded"
+          className="flex items-baseline gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E] rounded"
         >
-          <span className="font-serif text-xl font-semibold tracking-tight text-[#F3EFE6]">
+          <span className="font-serif text-xl font-semibold text-[#F3EFE6]">
             Noodle
           </span>
         </button>
@@ -133,7 +133,7 @@ export function Sidebar({
         {/* Pillars */}
         <div>
           <p className="px-2.5 pb-2 text-[11px] font-semibold tracking-wide text-[#767D8F]">
-            Pillars
+            Folders
           </p>
           <nav aria-label="Workspace Pillars" className="space-y-1">
             {pillarItems.map((item) => {
@@ -144,10 +144,10 @@ export function Sidebar({
                   key={item.id}
                   type="button"
                   onClick={() => handlePillarClick(item.id)}
-                  className={`group flex w-full items-start gap-3 rounded-lg px-2.5 py-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60 ${
+                  className={`group flex w-full items-start gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E] ${
                     isActive
-                      ? 'bg-[#E0A83E]/12 text-[#F5EFE2]'
-                      : 'text-[#B2B7C4] hover:bg-[#1A1D26] hover:text-[#ECEBE6]'
+                      ? 'bg-[#1C202B] text-[#F5EFE2]'
+                      : 'text-[#B2B7C4] hover:bg-[#171A23] hover:text-[#ECEBE6]'
                   }`}
                 >
                   <Icon
@@ -183,7 +183,7 @@ export function Sidebar({
         {/* Workspace Views */}
         <div>
           <p className="px-2.5 pb-2 text-[11px] font-semibold tracking-wide text-[#767D8F]">
-            Modes & System
+            Tools &amp; Settings
           </p>
           <nav aria-label="Workspace Views" className="space-y-1">
             {toolItems.map((item) => {
@@ -194,10 +194,10 @@ export function Sidebar({
                   key={item.path}
                   type="button"
                   onClick={() => handleRouteClick(item.path)}
-                  className={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E]/60 ${
+                  className={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E0A83E] ${
                     isActive
-                      ? 'bg-[#E0A83E]/12 text-[#F5EFE2]'
-                      : 'text-[#B2B7C4] hover:bg-[#1A1D26] hover:text-[#ECEBE6]'
+                      ? 'bg-[#1C202B] text-[#F5EFE2]'
+                      : 'text-[#B2B7C4] hover:bg-[#171A23] hover:text-[#ECEBE6]'
                   }`}
                 >
                   <Icon

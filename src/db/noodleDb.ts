@@ -17,6 +17,7 @@ export interface WorkspaceHandleRow {
   key: 'current';
   handle: FileSystemDirectoryHandle;
   folderName: string;
+  directManualRoot?: boolean;
   updatedAt: string;
 }
 
@@ -27,6 +28,7 @@ export interface NoteIndexRow {
   fileName: string;
   title: string;
   category: Category;
+  subfolder?: string;
   updatedAt: string;
   size: number;
   lastModified: number;
@@ -255,11 +257,13 @@ export async function markBatchRolledBack(batchId: string): Promise<void> {
 
 export async function saveWorkspaceHandle(
   handle: FileSystemDirectoryHandle,
+  directManualRoot = false,
 ): Promise<void> {
   await noodleDb.workspaceHandles.put({
     key: 'current',
     handle,
     folderName: handle.name,
+    ...(directManualRoot ? {directManualRoot: true} : {}),
     updatedAt: new Date().toISOString(),
   });
 }
@@ -287,6 +291,7 @@ export function buildNoteIndexRow(entry: StoredNoteEntry): NoteIndexRow {
     fileName: entry.fileName,
     title: entry.note.title,
     category: entry.note.category,
+    ...(entry.note.subfolder ? {subfolder: entry.note.subfolder} : {}),
     updatedAt: entry.note.updatedAt,
     size: entry.size ?? 0,
     lastModified: entry.lastModified ?? 0,
